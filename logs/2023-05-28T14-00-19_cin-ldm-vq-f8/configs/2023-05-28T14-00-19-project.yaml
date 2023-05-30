@@ -22,10 +22,6 @@ model:
         out_channels: 4
         model_channels: 256
         attention_resolutions:
-        #note: this isn\t actually the resolution but
-        # the downsampling factor, i.e. this corresnponds to
-        # attention on spatial resolution 8,16,32, as the
-        # spatial reolution of the latents is 32 for f8
         - 4
         - 2
         - 1
@@ -70,8 +66,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
-    num_workers: 1
+    batch_size: 64
+    num_workers: 12
     wrap: false
     train:
       target: ldm.data.imagenet.ImageNetTrain
@@ -83,16 +79,3 @@ data:
       params:
         config:
           size: 256
-
-
-lightning:
-  callbacks:
-    image_logger:
-      target: main.ImageLogger
-      params:
-        batch_frequency: 5000
-        max_images: 8
-        increase_log_steps: False
-
-  trainer:
-    benchmark: True

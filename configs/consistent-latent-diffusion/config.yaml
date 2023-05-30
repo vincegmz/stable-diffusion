@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 1.0e-06
-  target: ldm.models.diffusion.ddpm.LatentDiffusion
+  target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
     linear_start: 0.0015
     linear_end: 0.0195
@@ -13,14 +13,16 @@ model:
     channels: 4
     cond_stage_trainable: true
     conditioning_key: crossattn
-    monitor: val/loss_simple_ema
-    unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+    monitor: val/loss_simple_emas
+    use_ema: true
+    teacher_model_config:
+      target: ldm.modules.diffusionmodules.unet_minzhe.UNetModel
       params:
+        ckpt_path: models/unet_models/teacher_unet/edm_imagenet64_ema.pt
         image_size: 32
-        in_channels: 4
-        out_channels: 4
-        model_channels: 256
+        in_channels: 3
+        out_channels: 3
+        model_channels: 192   
         attention_resolutions:
         #note: this isn\t actually the resolution but
         # the downsampling factor, i.e. this corresnponds to
@@ -29,12 +31,60 @@ model:
         - 4
         - 2
         - 1
-        num_res_blocks: 2
+        num_res_blocks: 3
         channel_mult:
         - 1
         - 2
         - 4
-        num_head_channels: 32
+        num_head_channels: 64
+        use_spatial_transformer: true
+        transformer_depth: 1
+        context_dim: 512
+    unet_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 32
+        in_channels: 3
+        out_channels: 3
+        model_channels: 192
+        attention_resolutions:
+        #note: this isn\t actually the resolution but
+        # the downsampling factor, i.e. this corresnponds to
+        # attention on spatial resolution 8,16,32, as the
+        # spatial reolution of the latents is 32 for f8
+        - 4
+        - 2
+        - 1
+        num_res_blocks: 3
+        channel_mult:
+        - 1
+        - 2
+        - 4
+        num_head_channels: 64
+        use_spatial_transformer: true
+        transformer_depth: 1
+        context_dim: 512
+    target_model_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 32
+        in_channels: 3
+        out_channels: 3
+        model_channels: 192
+        attention_resolutions:
+        #note: this isn\t actually the resolution but
+        # the downsampling factor, i.e. this corresnponds to
+        # attention on spatial resolution 8,16,32, as the
+        # spatial reolution of the latents is 32 for f8
+        - 4
+        - 2
+        - 1
+        num_res_blocks: 3
+        channel_mult:
+        - 1
+        - 2
+        - 4
+        num_head_channels: 64
         use_spatial_transformer: true
         transformer_depth: 1
         context_dim: 512
@@ -70,8 +120,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
-    num_workers: 1
+    batch_size: 64
+    num_workers: 12
     wrap: false
     train:
       target: ldm.data.imagenet.ImageNetTrain

@@ -24,7 +24,7 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
-
+from ldm.nn import append_dims
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -1390,6 +1390,363 @@ class LatentDiffusion(DDPM):
         x = nn.functional.conv2d(x, weight=self.colorize)
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
+
+
+
+class ConsistentLatentDiffusion(LatentDiffusion):
+    def __init__ (self, 
+        target_model_config,
+        teacher_model_config,
+        use_ema,
+        conditioning_key = None,
+        sigma_data: float = 0.5,
+        sigma_max=80.0,
+        sigma_min=0.002,
+        rho=7.0,
+        weight_schedule="karras",
+        distillation=False,
+        loss_norm="lpips",
+        *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+        self.conditioning_key = conditioning_key
+
+        # Kerras Denoiser parameter used for selecting t and t2
+        self.weight_schedule = weight_schedule
+        self.sigma_data = sigma_data
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.rho = rho
+        self.distillation = distillation
+        self.loss_norm = loss_norm
+        self.use_ema = use_ema
+        # self.model = DiffusionWrapper(self.online_config, self.conditioning_key)
+       
+
+        if target_model_config:
+            self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
+            self.target_model.diffusion_model.requires_grad_(False)
+            self.target_model.diffusion_model.train()
+            if self.use_ema:
+                self.model_ema = LitEma(self.target_model)
+                print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
+
+        if teacher_model_config:
+            self.instantiate_teacher(teacher_model_config)
+        # if online_model_config:
+        #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
+
+    def instantiate_teacher(self, config):
+        self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
+        self.teacher_model.diffusion_model.eval()
+        self.teacher_model.diffusion_model.train = disabled_train
+        for param in self.teacher_model.diffusion_model.parameters():
+            param.requires_grad = False
+
+
+    def forward(self, x, *args, **kwargs):
+    
+        # continous time sampling. Not used in this model because emf function used in this repo is not the same as the one used in the one in Consistent model.
+        # Consistent model's emf creates num_scales which I have no idea what it means. 
+  
+        # indices = torch.randint(
+        #     0, num_scales-1, (x.shape[0],), device=self.device
+        # )
+
+        # t = self.sigma_max ** (1 / self.rho) + indices /(num_scales-1)  * (
+        #     self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
+        # )
+        # t = t**self.rho
+
+        # t2 = self.sigma_max ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+        #     self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
+        # )
+        # t2 = t2**self.rho
+
+        t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        if self.model.conditioning_key is not None:
+            assert c is not None
+            if self.cond_stage_trainable:
+                c = self.get_learned_conditioning(c)
+            if self.shorten_cond_schedule:  # TODO: drop this option
+                tc = self.cond_ids[t].to(self.device)
+                c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
+        return self.p_losses(x, t, *args, **kwargs)
+    
+    def get_weightings(weight_schedule, snrs, sigma_data):
+        if weight_schedule == "snr":
+            weightings = snrs
+        elif weight_schedule == "snr+1":
+            weightings = snrs + 1
+        elif weight_schedule == "karras":
+            weightings = snrs + 1.0 / sigma_data**2
+        elif weight_schedule == "truncated-snr":
+            weightings = torch.clamp(snrs, min=1.0)
+        elif weight_schedule == "uniform":
+            weightings = torch.ones_like(snrs)
+        else:
+            raise NotImplementedError()
+        return weightings
+    def apply_model(self, x_noisy, t, cond, model_type,return_ids=False):
+        if isinstance(cond, dict):
+            # hybrid case, cond is exptected to be a dict
+            pass
+        else:
+            if not isinstance(cond, list):
+                cond = [cond]
+            key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
+            cond = {key: cond}
+
+        if hasattr(self, "split_input_params"):
+            assert len(cond) == 1  # todo can only deal with one conditioning atm
+            assert not return_ids  
+            ks = self.split_input_params["ks"]  # eg. (128, 128)
+            stride = self.split_input_params["stride"]  # eg. (64, 64)
+
+            h, w = x_noisy.shape[-2:]
+
+            fold, unfold, normalization, weighting = self.get_fold_unfold(x_noisy, ks, stride)
+
+            z = unfold(x_noisy)  # (bn, nc * prod(**ks), L)
+            # Reshape to img shape
+            z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
+            z_list = [z[:, :, :, :, i] for i in range(z.shape[-1])]
+
+            if self.cond_stage_key in ["image", "LR_image", "segmentation",
+                                       'bbox_img'] and self.model.conditioning_key:  # todo check for completeness
+                c_key = next(iter(cond.keys()))  # get key
+                c = next(iter(cond.values()))  # get value
+                assert (len(c) == 1)  # todo extend to list with more than one elem
+                c = c[0]  # get element
+
+                c = unfold(c)
+                c = c.view((c.shape[0], -1, ks[0], ks[1], c.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
+
+                cond_list = [{c_key: [c[:, :, :, :, i]]} for i in range(c.shape[-1])]
+
+            elif self.cond_stage_key == 'coordinates_bbox':
+                assert 'original_image_size' in self.split_input_params, 'BoudingBoxRescaling is missing original_image_size'
+
+                # assuming padding of unfold is always 0 and its dilation is always 1
+                n_patches_per_row = int((w - ks[0]) / stride[0] + 1)
+                full_img_h, full_img_w = self.split_input_params['original_image_size']
+                # as we are operating on latents, we need the factor from the original image size to the
+                # spatial latent size to properly rescale the crops for regenerating the bbox annotations
+                num_downs = self.first_stage_model.encoder.num_resolutions - 1
+                rescale_latent = 2 ** (num_downs)
+
+                # get top left postions of patches as conforming for the bbbox tokenizer, therefore we
+                # need to rescale the tl patch coordinates to be in between (0,1)
+                tl_patch_coordinates = [(rescale_latent * stride[0] * (patch_nr % n_patches_per_row) / full_img_w,
+                                         rescale_latent * stride[1] * (patch_nr // n_patches_per_row) / full_img_h)
+                                        for patch_nr in range(z.shape[-1])]
+
+                # patch_limits are tl_coord, width and height coordinates as (x_tl, y_tl, h, w)
+                patch_limits = [(x_tl, y_tl,
+                                 rescale_latent * ks[0] / full_img_w,
+                                 rescale_latent * ks[1] / full_img_h) for x_tl, y_tl in tl_patch_coordinates]
+                # patch_values = [(np.arange(x_tl,min(x_tl+ks, 1.)),np.arange(y_tl,min(y_tl+ks, 1.))) for x_tl, y_tl in tl_patch_coordinates]
+
+                # tokenize crop coordinates for the bounding boxes of the respective patches
+                patch_limits_tknzd = [torch.LongTensor(self.bbox_tokenizer._crop_encoder(bbox))[None].to(self.device)
+                                      for bbox in patch_limits]  # list of length l with tensors of shape (1, 2)
+                print(patch_limits_tknzd[0].shape)
+                # cut tknzd crop position from conditioning
+                assert isinstance(cond, dict), 'cond must be dict to be fed into model'
+                cut_cond = cond['c_crossattn'][0][..., :-2].to(self.device)
+                print(cut_cond.shape)
+
+                adapted_cond = torch.stack([torch.cat([cut_cond, p], dim=1) for p in patch_limits_tknzd])
+                adapted_cond = rearrange(adapted_cond, 'l b n -> (l b) n')
+                print(adapted_cond.shape)
+                adapted_cond = self.get_learned_conditioning(adapted_cond)
+                print(adapted_cond.shape)
+                adapted_cond = rearrange(adapted_cond, '(l b) n d -> l b n d', l=z.shape[-1])
+                print(adapted_cond.shape)
+
+                cond_list = [{'c_crossattn': [e]} for e in adapted_cond]
+
+            else:
+                cond_list = [cond for i in range(z.shape[-1])]  # Todo make this more efficient
+
+            # apply model by loop over crops
+            if model_type == 'online':
+                output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
+            elif model_type == 'teacher':
+                output_list = self.teacher_model(z_list, t, **cond_list)
+            elif model_type == 'target':
+                output_list = self.target_model(z_list, t, **cond_list)
+            else:
+                raise NotImplementedError('only online, teacher and target models are implemented')
+            assert not isinstance(output_list[0],
+                                tuple)  # todo cant deal with multiple model outputs check this never happens
+
+            o = torch.stack(output_list, axis=-1)
+            o = o * weighting
+            # Reverse reshape to img shape
+            o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
+            # stitch crops together
+            x_recon = fold(o) / normalization
+
+        else:
+            if model_type == 'online':
+                x_recon = self.model(x_noisy, t, **cond)
+            elif model_type == 'teacher':
+                x_recon = self.teacher_model(x_noisy, t, **cond)
+            elif model_type == 'target':
+                x_recon = self.target_model(x_noisy, t, **cond)
+            else:
+                raise NotImplementedError('only online, teacher and target are valid model types')
+
+        if isinstance(x_recon, tuple) and not return_ids:
+            return x_recon[0]
+        else:
+            return x_recon
+
+    def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
+        return (extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - pred_xstart) / \
+               extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+
+    def _prior_bpd(self, x_start):
+        """
+        Get the prior KL term for the variational lower-bound, measured in
+        bits-per-dim.
+        This term can't be optimized, as it only depends on the encoder.
+        :param x_start: the [N x C x ...] tensor of inputs.
+        :return: a batch of [N] KL values (in bits), one per batch element.
+        """
+        batch_size = x_start.shape[0]
+        t = torch.tensor([self.num_timesteps - 1] * batch_size, device=x_start.device)
+        qt_mean, _, qt_log_variance = self.q_mean_variance(x_start, t)
+        kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
+        return mean_flat(kl_prior) / np.log(2.0)
+
+    def p_losses(self, x_start, cond, t, noise=None):
+        noise = default(noise, lambda: torch.randn_like(x_start))
+        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        model_output = self.apply_model(x_noisy, t, cond)
+
+        loss_dict = {}
+        prefix = 'train' if self.training else 'val'
+
+        if self.parameterization == "x0":
+            target = x_start
+        elif self.parameterization == "eps":
+            target = noise
+        else:
+            raise NotImplementedError()
+
+        loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+
+        logvar_t = self.logvar[t].to(self.device)
+        loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+        if self.learn_logvar:
+            loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
+            loss_dict.update({'logvar': self.logvar.data.mean()})
+
+        loss = self.l_simple_weight * loss.mean()
+
+        loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+        loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+        loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+        loss += (self.original_elbo_weight * loss_vlb)
+        loss_dict.update({f'{prefix}/loss': loss})
+
+        return loss, loss_dict
+
+        return super().apply_model(x_noisy, t, cond, return_ids)
+    def p_losses(self, x_start, cond, t, noise=None):
+        noise = default(noise, lambda: torch.randn_like(x_start))
+        x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
+        distiller = self.apply_model(x_t, t, cond,'online')
+        x_t2 = heun_solver(x_t, t, t-1, x_start)
+        distiller_target = self.apply_model(x_t2,t-1,cond,'target')
+
+        dims = len(x_start.shape)
+        def heun_solver(samples, t, next_t, x0):
+            x = samples
+            if self.teacher_model is None:
+                denoiser = x0
+            else:
+                denoiser = self.apply_model(x, t,'teacher')
+            #TODO: check the dimension of samples 
+            d = (x - denoiser) / append_dims(t, dims)
+            samples = x + d * append_dims(next_t - t, dims)
+            if self.teacher_model is None:
+                denoiser = x0
+            else:
+                denoiser = self.apply_model(samples, next_t,'teacher')
+
+            next_d = (samples - denoiser) / append_dims(next_t, dims)
+            samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
+
+            return samples
+        loss_dict = {}
+        prefix = 'train' if self.training else 'val'
+
+        if self.parameterization == "x0":
+            target = x_start
+        elif self.parameterization == "eps":
+            target = noise
+        else:
+            raise NotImplementedError()
+        #LOSS BASED ON Consistent Model
+        snrs = self.get_snr(t)
+        weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
+        if self.loss_norm == "l1":
+            diffs = torch.abs(distiller - distiller_target)
+            loss = mean_flat(diffs) * weights
+        elif self.loss_norm == "l2":
+            diffs = (distiller - distiller_target) ** 2
+            loss = mean_flat(diffs) * weights
+        elif self.loss_norm == "l2-32":
+            distiller = torch.functional.interpolate(distiller, size=32, mode="bilinear")
+            distiller_target = torch.functional.interpolate(
+                distiller_target,
+                size=32,
+                mode="bilinear",
+            )
+            diffs = (distiller - distiller_target) ** 2
+            loss = mean_flat(diffs) * weights
+        elif self.loss_norm == "lpips":
+            if x_start.shape[-1] < 256:
+                distiller = torch.functional.interpolate(distiller, size=224, mode="bilinear")
+                distiller_target = torch.functional.interpolate(
+                    distiller_target, size=224, mode="bilinear"
+                )
+
+            loss = (
+                self.lpips_loss(
+                    (distiller + 1) / 2.0,
+                    (distiller_target + 1) / 2.0,
+                )
+                * weights
+            )
+        else:
+            raise ValueError(f"Unknown loss norm {self.loss_norm}")
+        
+
+        loss_dict.update({f'{prefix}/loss_simple': loss.mean()})
+
+        #Lossed calculated by latent diffusion
+        # logvar_t = self.logvar[t].to(self.device)
+        # loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        # # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+        # if self.learn_logvar:
+        #     loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
+        #     loss_dict.update({'logvar': self.logvar.data.mean()})
+
+        # loss = self.l_simple_weight * loss.mean()
+
+        # loss_vlb = self.get_loss(distiller,distiller_target, mean=False).mean(dim=(1, 2, 3))
+        # loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+        # loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+        # loss += (self.original_elbo_weight * loss_vlb)
+        # loss_dict.update({f'{prefix}/loss': loss})
+
+        return loss, loss_dict
 
 
 class DiffusionWrapper(pl.LightningModule):
