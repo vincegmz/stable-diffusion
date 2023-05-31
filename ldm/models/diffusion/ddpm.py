@@ -5,7 +5,7 @@ https://github.com/openai/improved-diffusion/blob/e94489283bb876ac1477d5dd7709bb
 https://github.com/CompVis/taming-transformers
 -- merci
 """
-
+import copy
 import torch
 import torch.nn as nn
 import numpy as np
@@ -18,7 +18,7 @@ from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
-from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
+from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config, create_ema_and_scales_fn,update_ema
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
@@ -1397,17 +1397,30 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     def __init__ (self, 
         target_model_config,
         teacher_model_config,
+        online_model_config,
         use_ema,
-        conditioning_key = None,
-        sigma_data: float = 0.5,
-        sigma_max=80.0,
-        sigma_min=0.002,
-        rho=7.0,
-        weight_schedule="karras",
-        distillation=False,
+        #CD Training Defaults
+        target_ema_mode="fixed",
+        scale_mode="fixed",
+        total_training_steps=600000,
+        start_ema=0.0,
+        start_scales=40,
+        end_scales=40,
+        distill_steps_per_iter=50000,
         loss_norm="lpips",
+        # Non Unet Defaults
+        sigma_min=0.002,
+        sigma_max=80.0,
+        lr = 0.000008, 
+        ema_rate = "0.999,0.9999,0.9999432189950708",
+        weight_schedule="karras",
+        sigma_data: float = 0.5,
+        rho=7.0,
+        resume_checkpoint=False,
+        conditioning_key="labels",
+        distillation=False,
         *args, **kwargs):
-
+        
         super().__init__(*args, **kwargs)
         self.conditioning_key = conditioning_key
 
@@ -1420,9 +1433,24 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         self.distillation = distillation
         self.loss_norm = loss_norm
         self.use_ema = use_ema
+        self.target_ema_mode = target_ema_mode
+        self.total_steps = total_training_steps
+        self.distill_steps_per_iter = distill_steps_per_iter
+        self.lr = lr
         # self.model = DiffusionWrapper(self.online_config, self.conditioning_key)
-       
-
+        self.ema_fn = create_ema_and_scales_fn(target_ema_mode,start_ema,scale_mode, start_scales, end_scales, self.total_steps,self.distill_steps_per_iter)
+        self.ema_rate = (
+            [ema_rate]
+            if isinstance(ema_rate, float)
+            else [float(x) for x in ema_rate.split(",")]
+        )
+        if resume_checkpoint:
+            pass
+        else:
+            self.ema_params = [
+                copy.deepcopy(self.mp_trainer.master_params)
+                for _ in range(len(self.ema_rate))
+            ]
         if target_model_config:
             self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
             self.target_model.diffusion_model.requires_grad_(False)
@@ -1433,37 +1461,31 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
         if teacher_model_config:
             self.instantiate_teacher(teacher_model_config)
-        # if online_model_config:
-        #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
+        if online_model_config:
+            self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
+            for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
+                dst.data.copy_(src.data)
 
-    def instantiate_teacher(self, config):
-        self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
-        self.teacher_model.diffusion_model.eval()
-        self.teacher_model.diffusion_model.train = disabled_train
-        for param in self.teacher_model.diffusion_model.parameters():
-            param.requires_grad = False
-
-
+                
     def forward(self, x, *args, **kwargs):
     
-        # continous time sampling. Not used in this model because emf function used in this repo is not the same as the one used in the one in Consistent model.
-        # Consistent model's emf creates num_scales which I have no idea what it means. 
-  
-        # indices = torch.randint(
-        #     0, num_scales-1, (x.shape[0],), device=self.device
-        # )
 
-        # t = self.sigma_max ** (1 / self.rho) + indices /(num_scales-1)  * (
-        #     self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
-        # )
-        # t = t**self.rho
+        target_ema, num_scales = self.ema_fn(self.global_step)
+        indices = torch.randint(
+            0, num_scales-1, (x.shape[0],), device=self.device
+        ).long
 
-        # t2 = self.sigma_max ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
-        #     self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
-        # )
-        # t2 = t2**self.rho
+        t = self.sigma_max ** (1 / self.rho) + indices /(num_scales-1)  * (
+            self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
+        )
+        t = t**self.rho
 
-        t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        t2 = self.sigma_max ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+            self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
+        )
+        t2 = t2**self.rho
+
+        # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
@@ -1471,22 +1493,82 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
-        return self.p_losses(x, t, *args, **kwargs)
-    
-    def get_weightings(weight_schedule, snrs, sigma_data):
-        if weight_schedule == "snr":
-            weightings = snrs
-        elif weight_schedule == "snr+1":
-            weightings = snrs + 1
-        elif weight_schedule == "karras":
-            weightings = snrs + 1.0 / sigma_data**2
-        elif weight_schedule == "truncated-snr":
-            weightings = torch.clamp(snrs, min=1.0)
-        elif weight_schedule == "uniform":
-            weightings = torch.ones_like(snrs)
+        return self.p_losses(x,c,t,t2, *args, **kwargs)
+   
+
+    def p_losses(self, x_start, cond, t,t2, noise=None):
+        noise = default(noise, lambda: torch.randn_like(x_start))
+        x_t = x_start + noise * append_dims(t, dims)
+        # latent_diffusion_q_sample x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
+        distiller = self.denoise(x_t, t, cond,'online')
+        x_t2 = heun_solver(x_t, t, t2, x_start)
+        distiller_target = self.denoise(x_t2,t2,cond,'target')
+
+        dims = len(x_start.shape)
+        def heun_solver(samples, t, next_t, x0):
+            x = samples
+            if self.teacher_model is None:
+                denoiser = x0
+            else:
+                denoiser = self.denoise(x, t,cond,'teacher')
+            #TODO: check the dimension of samples 
+            d = (x - denoiser) / append_dims(t, dims)
+            samples = x + d * append_dims(next_t - t, dims)
+            if self.teacher_model is None:
+                denoiser = x0
+            else:
+                denoiser = self.denoise(x, next_t,cond,'teacher')
+
+            next_d = (samples - denoiser) / append_dims(next_t, dims)
+            samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
+
+            return samples
+        loss_dict = {}
+        prefix = 'train' if self.training else 'val'
+
+        if self.parameterization != "x0":
+            raise NotImplementedError("Only x0 parameterization is supported for consistency model")
+        #LOSS BASED ON Consistent Model
+        snrs = self.get_snr(t)
+        weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
+        if self.loss_norm == "l1":
+            diffs = torch.abs(distiller - distiller_target)
+            loss = mean_flat(diffs) * weights
+        elif self.loss_norm == "l2":
+            diffs = (distiller - distiller_target) ** 2
+            loss = mean_flat(diffs) * weights
+        elif self.loss_norm == "l2-32":
+            distiller = torch.functional.interpolate(distiller, size=32, mode="bilinear")
+            distiller_target = torch.functional.interpolate(
+                distiller_target,
+                size=32,
+                mode="bilinear",
+            )
+            diffs = (distiller - distiller_target) ** 2
+            loss = mean_flat(diffs) * weights
+        elif self.loss_norm == "lpips":
+            if x_start.shape[-1] < 256:
+                distiller = torch.functional.interpolate(distiller, size=224, mode="bilinear")
+                distiller_target = torch.functional.interpolate(
+                    distiller_target, size=224, mode="bilinear"
+                )
+
+            loss = (
+                self.lpips_loss(
+                    (distiller + 1) / 2.0,
+                    (distiller_target + 1) / 2.0,
+                )
+                * weights
+            )
         else:
-            raise NotImplementedError()
-        return weightings
+            raise ValueError(f"Unknown loss norm {self.loss_norm}")
+        
+
+        loss_dict.update({f'{prefix}/loss_simple': loss.mean()})
+
+        return loss, loss_dict
+
+    
     def apply_model(self, x_noisy, t, cond, model_type,return_ids=False):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
@@ -1603,151 +1685,112 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             return x_recon
 
-    def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
-        return (extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - pred_xstart) / \
-               extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+    def denoise(self, x_t, sigmas,cond,model_type):
 
-    def _prior_bpd(self, x_start):
-        """
-        Get the prior KL term for the variational lower-bound, measured in
-        bits-per-dim.
-        This term can't be optimized, as it only depends on the encoder.
-        :param x_start: the [N x C x ...] tensor of inputs.
-        :return: a batch of [N] KL values (in bits), one per batch element.
-        """
-        batch_size = x_start.shape[0]
-        t = torch.tensor([self.num_timesteps - 1] * batch_size, device=x_start.device)
-        qt_mean, _, qt_log_variance = self.q_mean_variance(x_start, t)
-        kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
-        return mean_flat(kl_prior) / np.log(2.0)
-
-    def p_losses(self, x_start, cond, t, noise=None):
-        noise = default(noise, lambda: torch.randn_like(x_start))
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        model_output = self.apply_model(x_noisy, t, cond)
-
-        loss_dict = {}
-        prefix = 'train' if self.training else 'val'
-
-        if self.parameterization == "x0":
-            target = x_start
-        elif self.parameterization == "eps":
-            target = noise
+        if not self.distillation:
+            c_skip, c_out, c_in = [
+                append_dims(x, x_t.ndim) for x in self.get_scalings(sigmas)
+            ]
+        else:
+            c_skip, c_out, c_in = [
+                append_dims(x, x_t.ndim)
+                for x in self.get_scalings_for_boundary_condition(sigmas)
+            ]
+        rescaled_t = 1000 * 0.25 * torch.log(sigmas + 1e-44)
+        if model_type == 'online':
+            model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
+        elif model_type == 'teacher':
+            model_output = self.apply_model(c_in * x_t, rescaled_t, cond,model_type)
+        elif model_type == 'target':
+            model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
+        denoised = c_out * model_output + c_skip * x_t
+        return model_output, denoised
+    
+    def get_weightings(weight_schedule, snrs, sigma_data):
+        if weight_schedule == "snr":
+            weightings = snrs
+        elif weight_schedule == "snr+1":
+            weightings = snrs + 1
+        elif weight_schedule == "karras":
+            weightings = snrs + 1.0 / sigma_data**2
+        elif weight_schedule == "truncated-snr":
+            weightings = torch.clamp(snrs, min=1.0)
+        elif weight_schedule == "uniform":
+            weightings = torch.ones_like(snrs)
         else:
             raise NotImplementedError()
+        return weightings
+    def get_scalings(self, sigma):
+        c_skip = self.sigma_data**2 / (sigma**2 + self.sigma_data**2)
+        c_out = sigma * self.sigma_data / (sigma**2 + self.sigma_data**2) ** 0.5
+        c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
+        return c_skip, c_out, c_in
 
-        loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
-        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+    def get_scalings_for_boundary_condition(self, sigma):
+        c_skip = self.sigma_data**2 / (
+            (sigma - self.sigma_min) ** 2 + self.sigma_data**2
+        )
+        c_out = (
+            (sigma - self.sigma_min)
+            * self.sigma_data
+            / (sigma**2 + self.sigma_data**2) ** 0.5
+        )
+        c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
+        return c_skip, c_out, c_in
+    
+    def on_train_batch_end(self, *args, **kwargs):
+        #load previous ema and update parameters
+        self._update_ema()
+        # load current ema and update parameters
+        if self.target_model:
+            self._update_target_ema()
+    
+    def _update_target_ema(self):
+        target_ema, scales = self.ema_scale_fn(self.global_step+1) # check how global_step is updatedafter on-train_batch_end
+        with torch.no_grad():
+            update_ema(
+                self.target_model.parameters(),
+                self.online_model.parameters(),
+                rate=target_ema,
+            )
+    
+    def _update_ema(self):
+        for rate, params in zip(self.ema_rate, self.ema_params):
+            update_ema(params, self.online_model.parameters(), rate=rate)
 
-        logvar_t = self.logvar[t].to(self.device)
-        loss = loss_simple / torch.exp(logvar_t) + logvar_t
-        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+    def instantiate_teacher(self, config):
+        self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
+        self.teacher_model.diffusion_model.eval()
+        self.teacher_model.diffusion_model.train = disabled_train
+        for param in self.teacher_model.diffusion_model.parameters():
+            param.requires_grad = False
+
+    def configure_optimizers(self):
+        lr = self.learning_rate
+        # changed from self.model.parameters() to self.online_model.parameters()
+        params = list(self.online_model.parameters())
+        if self.cond_stage_trainable:
+            print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
+            params = params + list(self.cond_stage_model.parameters())
         if self.learn_logvar:
-            loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
-            loss_dict.update({'logvar': self.logvar.data.mean()})
+            print('Diffusion model optimizing logvar')
+            params.append(self.logvar)
+        #changed from AdamW to RAdam  
+        opt = torch.optim.RAdam(params, lr=lr,weight_decay=self.weight_decay)
+        if self.use_scheduler:
+            assert 'target' in self.scheduler_config
+            scheduler = instantiate_from_config(self.scheduler_config)
 
-        loss = self.l_simple_weight * loss.mean()
-
-        loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
-        loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-        loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
-        loss += (self.original_elbo_weight * loss_vlb)
-        loss_dict.update({f'{prefix}/loss': loss})
-
-        return loss, loss_dict
-
-        return super().apply_model(x_noisy, t, cond, return_ids)
-    def p_losses(self, x_start, cond, t, noise=None):
-        noise = default(noise, lambda: torch.randn_like(x_start))
-        x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
-        distiller = self.apply_model(x_t, t, cond,'online')
-        x_t2 = heun_solver(x_t, t, t-1, x_start)
-        distiller_target = self.apply_model(x_t2,t-1,cond,'target')
-
-        dims = len(x_start.shape)
-        def heun_solver(samples, t, next_t, x0):
-            x = samples
-            if self.teacher_model is None:
-                denoiser = x0
-            else:
-                denoiser = self.apply_model(x, t,'teacher')
-            #TODO: check the dimension of samples 
-            d = (x - denoiser) / append_dims(t, dims)
-            samples = x + d * append_dims(next_t - t, dims)
-            if self.teacher_model is None:
-                denoiser = x0
-            else:
-                denoiser = self.apply_model(samples, next_t,'teacher')
-
-            next_d = (samples - denoiser) / append_dims(next_t, dims)
-            samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
-
-            return samples
-        loss_dict = {}
-        prefix = 'train' if self.training else 'val'
-
-        if self.parameterization == "x0":
-            target = x_start
-        elif self.parameterization == "eps":
-            target = noise
-        else:
-            raise NotImplementedError()
-        #LOSS BASED ON Consistent Model
-        snrs = self.get_snr(t)
-        weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
-        if self.loss_norm == "l1":
-            diffs = torch.abs(distiller - distiller_target)
-            loss = mean_flat(diffs) * weights
-        elif self.loss_norm == "l2":
-            diffs = (distiller - distiller_target) ** 2
-            loss = mean_flat(diffs) * weights
-        elif self.loss_norm == "l2-32":
-            distiller = torch.functional.interpolate(distiller, size=32, mode="bilinear")
-            distiller_target = torch.functional.interpolate(
-                distiller_target,
-                size=32,
-                mode="bilinear",
-            )
-            diffs = (distiller - distiller_target) ** 2
-            loss = mean_flat(diffs) * weights
-        elif self.loss_norm == "lpips":
-            if x_start.shape[-1] < 256:
-                distiller = torch.functional.interpolate(distiller, size=224, mode="bilinear")
-                distiller_target = torch.functional.interpolate(
-                    distiller_target, size=224, mode="bilinear"
-                )
-
-            loss = (
-                self.lpips_loss(
-                    (distiller + 1) / 2.0,
-                    (distiller_target + 1) / 2.0,
-                )
-                * weights
-            )
-        else:
-            raise ValueError(f"Unknown loss norm {self.loss_norm}")
-        
-
-        loss_dict.update({f'{prefix}/loss_simple': loss.mean()})
-
-        #Lossed calculated by latent diffusion
-        # logvar_t = self.logvar[t].to(self.device)
-        # loss = loss_simple / torch.exp(logvar_t) + logvar_t
-        # # loss = loss_simple / torch.exp(self.logvar) + self.logvar
-        # if self.learn_logvar:
-        #     loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
-        #     loss_dict.update({'logvar': self.logvar.data.mean()})
-
-        # loss = self.l_simple_weight * loss.mean()
-
-        # loss_vlb = self.get_loss(distiller,distiller_target, mean=False).mean(dim=(1, 2, 3))
-        # loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-        # loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
-        # loss += (self.original_elbo_weight * loss_vlb)
-        # loss_dict.update({f'{prefix}/loss': loss})
-
-        return loss, loss_dict
-
+            print("Setting up LambdaLR scheduler...")
+            scheduler = [
+                {
+                    'scheduler': LambdaLR(opt, lr_lambda=scheduler.schedule),
+                    'interval': 'step',
+                    'frequency': 1
+                }]
+            return [opt], scheduler
+        return opt
+    
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):
@@ -1776,6 +1819,7 @@ class DiffusionWrapper(pl.LightningModule):
             raise NotImplementedError()
 
         return out
+
 
 
 class Layout2ImgDiffusion(LatentDiffusion):

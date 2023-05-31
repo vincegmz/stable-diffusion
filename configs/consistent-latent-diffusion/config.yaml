@@ -4,6 +4,16 @@ model:
   params:
     linear_start: 0.0015
     linear_end: 0.0195
+    target_ema_mode: fixed
+    scale_mode: fixed 
+    total_training_steps: 600000
+    start_ema: 0.0
+    start_scales: 40
+    end_scales: 40
+    distill_steps_per_iter: 50000
+    loss_norm: lpips
+    sigma_min: 0.002
+    sigma_max: 80.0
     num_timesteps_cond: 1
     log_every_t: 200
     timesteps: 1000
@@ -14,11 +24,19 @@ model:
     cond_stage_trainable: true
     conditioning_key: crossattn
     monitor: val/loss_simple_emas
+    weight_schedule: uniform
+    weight_decay: 0.0
+    lr: 0.000008
+    ema_rate: 0.999,0.9999,0.9999432189950708
     use_ema: true
     teacher_model_config:
       target: ldm.modules.diffusionmodules.unet_minzhe.UNetModel
       params:
         ckpt_path: models/unet_models/teacher_unet/edm_imagenet64_ema.pt
+        use_fp16: true
+        use_scale_shift_norm: true
+        resblock_updown: true
+        dropout: 0.1 
         image_size: 32
         in_channels: 3
         out_channels: 3
@@ -37,12 +55,17 @@ model:
         - 2
         - 4
         num_head_channels: 64
+        # Modifed Unet in stable-diffusion
         use_spatial_transformer: true
         transformer_depth: 1
         context_dim: 512
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
+        use_fp16: true
+        use_scale_shift_norm: true
+        resblock_updown: true
+        dropout: 0.0
         image_size: 32
         in_channels: 3
         out_channels: 3
@@ -67,6 +90,10 @@ model:
     target_model_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
+        use_fp16: true
+        use_scale_shift_norm: true
+        resblock_updown: true
+        dropout: 0.0
         image_size: 32
         in_channels: 3
         out_channels: 3
