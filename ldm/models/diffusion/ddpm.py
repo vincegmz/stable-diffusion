@@ -8,6 +8,7 @@ https://github.com/CompVis/taming-transformers
 import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
@@ -17,7 +18,7 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
-
+from ldm.modules.diffusionmodules.resample import LossAwareSampler, UniformSampler,LossSecondMomentResampler,LogNormalSampler
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config, create_ema_and_scales_fn,update_ema
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -25,6 +26,7 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.nn import append_dims
+from piq import LPIPS
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -44,7 +46,7 @@ def uniform_on_device(r1, r2, shape, device):
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
-                 unet_config,
+                 unet_config = None,
                  timesteps=1000,
                  beta_schedule="linear",
                  loss_type="l2",
@@ -1397,7 +1399,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     def __init__ (self, 
         target_model_config,
         teacher_model_config,
-        online_model_config,
         use_ema,
         #CD Training Defaults
         target_ema_mode="fixed",
@@ -1408,6 +1409,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         end_scales=40,
         distill_steps_per_iter=50000,
         loss_norm="lpips",
+        consistent_schedule_sampler = None,
         # Non Unet Defaults
         sigma_min=0.002,
         sigma_max=80.0,
@@ -1416,27 +1418,40 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         weight_schedule="karras",
         sigma_data: float = 0.5,
         rho=7.0,
+        weight_decay = 0.0,
         resume_checkpoint=False,
         conditioning_key="labels",
         distillation=False,
         *args, **kwargs):
         
-        super().__init__(*args, **kwargs)
+        super().__init__(conditioning_key=conditioning_key,*args, **kwargs)
         self.conditioning_key = conditioning_key
 
         # Kerras Denoiser parameter used for selecting t and t2
         self.weight_schedule = weight_schedule
+        self.weight_decay = weight_decay
         self.sigma_data = sigma_data
         self.sigma_max = sigma_max
         self.sigma_min = sigma_min
         self.rho = rho
         self.distillation = distillation
+        if loss_norm == "lpips":
+            self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
         self.loss_norm = loss_norm
         self.use_ema = use_ema
         self.target_ema_mode = target_ema_mode
         self.total_steps = total_training_steps
         self.distill_steps_per_iter = distill_steps_per_iter
         self.lr = lr
+        self.resample_num_timesteps = 40
+        if consistent_schedule_sampler == "uniform":
+            self.consistent_schedule_sampler = UniformSampler(self.resample_num_timesteps)
+        elif consistent_schedule_sampler == "loss-second-moment":
+            self.consistent_schedule_sampler = LossSecondMomentResampler(self.resample_num_timesteps)
+        elif consistent_schedule_sampler == "lognormal":
+            self.consistent_schedule_sample = LogNormalSampler(self.resample_num_timesteps)
+        else:
+            raise NotImplementedError(f"unknown schedule sampler: {consistent_schedule_sampler}")
         # self.model = DiffusionWrapper(self.online_config, self.conditioning_key)
         self.ema_fn = create_ema_and_scales_fn(target_ema_mode,start_ema,scale_mode, start_scales, end_scales, self.total_steps,self.distill_steps_per_iter)
         self.ema_rate = (
@@ -1444,36 +1459,39 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if isinstance(ema_rate, float)
             else [float(x) for x in ema_rate.split(",")]
         )
+
+        if target_model_config:
+            self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
+            self.target_model.requires_grad_(False)
+            self.target_model.train()
+            # if self.use_ema:
+            #     self.model_ema = LitEma(self.target_model)
+            #     print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
+
+        if teacher_model_config:
+            self.instantiate_teacher(teacher_model_config)
+        # if online_model_config:
+        #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
+        #     for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
+        #         dst.data.copy_(src.data)
+        for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
+            dst.data.copy_(src.data)
         if resume_checkpoint:
             pass
         else:
             self.ema_params = [
-                copy.deepcopy(self.mp_trainer.master_params)
+                copy.deepcopy(list(self.model.parameters()))
                 for _ in range(len(self.ema_rate))
             ]
-        if target_model_config:
-            self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
-            self.target_model.diffusion_model.requires_grad_(False)
-            self.target_model.diffusion_model.train()
-            if self.use_ema:
-                self.model_ema = LitEma(self.target_model)
-                print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
-
-        if teacher_model_config:
-            self.instantiate_teacher(teacher_model_config)
-        if online_model_config:
-            self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
-            for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
-                dst.data.copy_(src.data)
-
                 
-    def forward(self, x, *args, **kwargs):
+    def forward(self, x, c, *args, **kwargs):
     
 
         target_ema, num_scales = self.ema_fn(self.global_step)
+        resample_t,resample_weights = self.consistent_schedule_sampler.sample(x.shape[0],self.device)
         indices = torch.randint(
             0, num_scales-1, (x.shape[0],), device=self.device
-        ).long
+        ).long()
 
         t = self.sigma_max ** (1 / self.rho) + indices /(num_scales-1)  * (
             self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
@@ -1493,17 +1511,13 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
-        return self.p_losses(x,c,t,t2, *args, **kwargs)
-   
+        loss,loss_dict = self.p_losses(x,c,t,t2, *args, **kwargs)
+        loss *= resample_weights
+        prefix = 'train' if self.training else 'val'
+        loss_dict.update({f'{prefix}/loss': loss.mean()})
+        return loss, loss_dict
 
     def p_losses(self, x_start, cond, t,t2, noise=None):
-        noise = default(noise, lambda: torch.randn_like(x_start))
-        x_t = x_start + noise * append_dims(t, dims)
-        # latent_diffusion_q_sample x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
-        distiller = self.denoise(x_t, t, cond,'online')
-        x_t2 = heun_solver(x_t, t, t2, x_start)
-        distiller_target = self.denoise(x_t2,t2,cond,'target')
-
         dims = len(x_start.shape)
         def heun_solver(samples, t, next_t, x0):
             x = samples
@@ -1523,13 +1537,23 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
 
             return samples
+        noise = default(noise, lambda: torch.randn_like(x_start))
+     
+        x_t = x_start + noise * append_dims(t, dims)
+        # latent_diffusion_q_sample x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
+        distiller = self.denoise(x_t, t, cond,'online')
+        x_t2 = heun_solver(x_t, t, t2, x_start)
+        distiller_target = self.denoise(x_t2,t2,cond,'target').detach()
+
+        dims = len(x_start.shape)
+     
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
 
         if self.parameterization != "x0":
             raise NotImplementedError("Only x0 parameterization is supported for consistency model")
         #LOSS BASED ON Consistent Model
-        snrs = self.get_snr(t)
+        snrs = t**-2
         weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
         if self.loss_norm == "l1":
             diffs = torch.abs(distiller - distiller_target)
@@ -1538,8 +1562,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             diffs = (distiller - distiller_target) ** 2
             loss = mean_flat(diffs) * weights
         elif self.loss_norm == "l2-32":
-            distiller = torch.functional.interpolate(distiller, size=32, mode="bilinear")
-            distiller_target = torch.functional.interpolate(
+            distiller = F.interpolate(distiller, size=32, mode="bilinear")
+            distiller_target = F.interpolate(
                 distiller_target,
                 size=32,
                 mode="bilinear",
@@ -1548,8 +1572,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             loss = mean_flat(diffs) * weights
         elif self.loss_norm == "lpips":
             if x_start.shape[-1] < 256:
-                distiller = torch.functional.interpolate(distiller, size=224, mode="bilinear")
-                distiller_target = torch.functional.interpolate(
+                distiller = F.interpolate(distiller, size=224, mode="bilinear")
+                distiller_target = F.interpolate(
                     distiller_target, size=224, mode="bilinear"
                 )
 
@@ -1704,9 +1728,9 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         elif model_type == 'target':
             model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
         denoised = c_out * model_output + c_skip * x_t
-        return model_output, denoised
+        return denoised
     
-    def get_weightings(weight_schedule, snrs, sigma_data):
+    def get_weightings(self, weight_schedule, snrs, sigma_data):
         if weight_schedule == "snr":
             weightings = snrs
         elif weight_schedule == "snr+1":
@@ -1750,25 +1774,25 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         with torch.no_grad():
             update_ema(
                 self.target_model.parameters(),
-                self.online_model.parameters(),
+                self.model.parameters(),
                 rate=target_ema,
             )
     
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):
-            update_ema(params, self.online_model.parameters(), rate=rate)
+            update_ema(params, self.model.parameters(), rate=rate)
 
     def instantiate_teacher(self, config):
         self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
-        self.teacher_model.diffusion_model.eval()
-        self.teacher_model.diffusion_model.train = disabled_train
-        for param in self.teacher_model.diffusion_model.parameters():
+        self.teacher_model.eval()
+        self.teacher_model.train = disabled_train
+        for param in self.teacher_model.parameters():
             param.requires_grad = False
 
     def configure_optimizers(self):
         lr = self.learning_rate
         # changed from self.model.parameters() to self.online_model.parameters()
-        params = list(self.online_model.parameters())
+        params = list(self.model.parameters())
         if self.cond_stage_trainable:
             print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
             params = params + list(self.cond_stage_model.parameters())
@@ -1790,7 +1814,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                 }]
             return [opt], scheduler
         return opt
-    
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):

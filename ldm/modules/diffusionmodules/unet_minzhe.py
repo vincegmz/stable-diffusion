@@ -692,8 +692,8 @@ class UNetModel(nn.Module):
             conv_nd(dims, model_channels, n_embed, 1),
             #nn.LogSoftmax(dim=1)  # change to cross_entropy and produce non-normalized logits
         )
-        if ckpt_path is not None:
-            self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
+        # if ckpt_path is not None:
+        #     self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
     def init_from_ckpt(self, path, ignore_keys=list()):
         loaded = th.load(path, map_location="cpu")
         sd = loaded

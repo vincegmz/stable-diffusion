@@ -2,6 +2,7 @@ model:
   base_learning_rate: 1.0e-06
   target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
+    parameterization: x0
     linear_start: 0.0015
     linear_end: 0.0195
     target_ema_mode: fixed
@@ -10,6 +11,7 @@ model:
     start_ema: 0.0
     start_scales: 40
     end_scales: 40
+    consistent_schedule_sampler: uniform
     distill_steps_per_iter: 50000
     loss_norm: lpips
     sigma_min: 0.002
@@ -20,7 +22,7 @@ model:
     first_stage_key: image
     cond_stage_key: class_label
     image_size: 32
-    channels: 4
+    channels: 3
     cond_stage_trainable: true
     conditioning_key: crossattn
     monitor: val/loss_simple_emas
@@ -33,14 +35,14 @@ model:
       target: ldm.modules.diffusionmodules.unet_minzhe.UNetModel
       params:
         ckpt_path: models/unet_models/teacher_unet/edm_imagenet64_ema.pt
-        use_fp16: true
+        #use_fp16: true
         use_scale_shift_norm: true
         resblock_updown: true
         dropout: 0.1 
         image_size: 32
         in_channels: 3
         out_channels: 3
-        model_channels: 192   
+        model_channels: 192   #192
         attention_resolutions:
         #note: this isn\t actually the resolution but
         # the downsampling factor, i.e. this corresnponds to
@@ -62,14 +64,14 @@ model:
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
-        use_fp16: true
+        #use_fp16: true
         use_scale_shift_norm: true
         resblock_updown: true
         dropout: 0.0
         image_size: 32
         in_channels: 3
         out_channels: 3
-        model_channels: 192
+        model_channels: 192 #192
         attention_resolutions:
         #note: this isn\t actually the resolution but
         # the downsampling factor, i.e. this corresnponds to
@@ -90,7 +92,7 @@ model:
     target_model_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
-        use_fp16: true
+        #use_fp16: true
         use_scale_shift_norm: true
         resblock_updown: true
         dropout: 0.0
@@ -118,12 +120,12 @@ model:
     first_stage_config:
       target: ldm.models.autoencoder.VQModelInterface
       params:
-        embed_dim: 4
-        n_embed: 16384
-        ckpt_path: models/first_stage_models/vq-f8/model.ckpt
+        embed_dim: 3
+        n_embed: 8192
+        ckpt_path: models/first_stage_models/vq-f4/model.ckpt
         ddconfig:
           double_z: false
-          z_channels: 4
+          z_channels: 3
           resolution: 256
           in_channels: 3
           out_ch: 3
@@ -131,11 +133,9 @@ model:
           ch_mult:
           - 1
           - 2
-          - 2
           - 4
           num_res_blocks: 2
-          attn_resolutions:
-          - 32
+          attn_resolutions: []
           dropout: 0.0
         lossconfig:
           target: torch.nn.Identity
@@ -147,8 +147,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 64
-    num_workers: 12
+    batch_size: 1
+    num_workers: 1
     wrap: false
     train:
       target: ldm.data.imagenet.ImageNetTrain
