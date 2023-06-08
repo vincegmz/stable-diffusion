@@ -6,7 +6,7 @@ model:
     linear_start: 0.0015
     linear_end: 0.0195
     target_ema_mode: fixed
-    scale_mode: fixed 
+    scale_mode: fixed
     total_training_steps: 600000
     start_ema: 0.0
     start_scales: 40
@@ -21,78 +21,45 @@ model:
     timesteps: 1000
     first_stage_key: image
     cond_stage_key: class_label
-    image_size: 32
+    image_size: 64
     channels: 3
     cond_stage_trainable: true
     conditioning_key: crossattn
     monitor: val/loss_simple_emas
     weight_schedule: uniform
     weight_decay: 0.0
-    lr: 0.000008
+    lr: 8.0e-06
     ema_rate: 0.999,0.9999,0.9999432189950708
     use_ema: true
     teacher_model_config:
       target: ldm.modules.diffusionmodules.unet_minzhe.UNetModel
       params:
         ckpt_path: models/unet_models/teacher_unet/edm_imagenet64_ema.pt
-        #use_fp16: true
         use_scale_shift_norm: true
         resblock_updown: true
-        dropout: 0.1 
-        image_size: 32
+        dropout: 0.1
+        image_size: 64
         in_channels: 3
         out_channels: 3
-        model_channels: 192   #192
+        model_channels: 192
         attention_resolutions:
-        #note: this isn\t actually the resolution but
-        # the downsampling factor, i.e. this corresnponds to
-        # attention on spatial resolution 8,16,32, as the
-        # spatial reolution of the latents is 32 for f8
-        - 4
         - 2
-        - 1
+        - 4
+        - 8
         num_res_blocks: 3
         channel_mult:
         - 1
         - 2
+        - 3
         - 4
         num_head_channels: 64
-        # Modifed Unet in stable-diffusion
+        num_heads: 4
         use_spatial_transformer: true
         transformer_depth: 1
         context_dim: 512
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
-        #use_fp16: true
-        use_scale_shift_norm: true
-        resblock_updown: true
-        dropout: 0.0
-        image_size: 32
-        in_channels: 3
-        out_channels: 3
-        model_channels: 192 #192
-        attention_resolutions:
-        #note: this isn\t actually the resolution but
-        # the downsampling factor, i.e. this corresnponds to
-        # attention on spatial resolution 8,16,32, as the
-        # spatial reolution of the latents is 32 for f8
-        - 4
-        - 2
-        - 1
-        num_res_blocks: 3
-        channel_mult:
-        - 1
-        - 2
-        - 4
-        num_head_channels: 64
-        use_spatial_transformer: true
-        transformer_depth: 1
-        context_dim: 512
-    target_model_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
-      params:
-        #use_fp16: true
         use_scale_shift_norm: true
         resblock_updown: true
         dropout: 0.0
@@ -101,18 +68,41 @@ model:
         out_channels: 3
         model_channels: 192
         attention_resolutions:
-        #note: this isn\t actually the resolution but
-        # the downsampling factor, i.e. this corresnponds to
-        # attention on spatial resolution 8,16,32, as the
-        # spatial reolution of the latents is 32 for f8
-        - 4
         - 2
-        - 1
+        - 4
+        - 8
         num_res_blocks: 3
         channel_mult:
         - 1
         - 2
+        - 3
         - 4
+        num_heads: 4
+        num_head_channels: 64
+        use_spatial_transformer: true
+        transformer_depth: 1
+        context_dim: 512
+    target_model_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        use_scale_shift_norm: true
+        resblock_updown: true
+        dropout: 0.0
+        image_size: 64
+        in_channels: 3
+        out_channels: 3
+        model_channels: 192
+        attention_resolutions:
+        - 2
+        - 4
+        - 8
+        num_res_blocks: 3
+        channel_mult:
+        - 1
+        - 2
+        - 3
+        - 4
+        num_heads: 4
         num_head_channels: 64
         use_spatial_transformer: true
         transformer_depth: 1
@@ -160,16 +150,3 @@ data:
       params:
         config:
           size: 256
-
-
-lightning:
-  callbacks:
-    image_logger:
-      target: main.ImageLogger
-      params:
-        batch_frequency: 5000
-        max_images: 8
-        increase_log_steps: False
-
-  trainer:
-    benchmark: True

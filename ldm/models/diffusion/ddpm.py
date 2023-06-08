@@ -1679,9 +1679,9 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if model_type == 'online':
                 output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
             elif model_type == 'teacher':
-                output_list = self.teacher_model(z_list, t, **cond_list)
+                output_list = [self.teacher_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
             elif model_type == 'target':
-                output_list = self.target_model(z_list, t, **cond_list)
+                output_list = [self.target_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
             else:
                 raise NotImplementedError('only online, teacher and target models are implemented')
             assert not isinstance(output_list[0],
@@ -1770,7 +1770,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             self._update_target_ema()
     
     def _update_target_ema(self):
-        target_ema, scales = self.ema_scale_fn(self.global_step+1) # check how global_step is updatedafter on-train_batch_end
+        target_ema, scales = self.ema_scale_fn(self.global_step-1) # check how global_step is updatedafter on-train_batch_end
         with torch.no_grad():
             update_ema(
                 self.target_model.parameters(),
