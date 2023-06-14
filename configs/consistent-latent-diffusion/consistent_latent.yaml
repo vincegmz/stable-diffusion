@@ -5,6 +5,7 @@ model:
     ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
     linear_start: 0.00085
     linear_end: 0.0120
+    # use_ema: true
     start_ema: 0.95
     consistent_schedule_sampler: uniform
     loss_norm: lpips
@@ -74,6 +75,7 @@ model:
     first_stage_config:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
+        ckpt_path: "models/first_stage_models/kl-f8/model.ckpt"
         embed_dim: 4
         monitor: val/rec_loss
         ddconfig:

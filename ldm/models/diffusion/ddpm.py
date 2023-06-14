@@ -1400,7 +1400,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         target_model_config,
         teacher_model_config,
         #CD Training Defaults
-        use_ema,
         start_ema=0.95,
         target_ema_mode="fixed",
         scale_mode="fixed",
@@ -1437,11 +1436,11 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         if loss_norm == "lpips":
             self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
         self.loss_norm = loss_norm
-        self.use_ema = use_ema
         self.target_ema_mode = target_ema_mode
         self.total_steps = total_training_steps
         self.distill_steps_per_iter = distill_steps_per_iter
         self.lr = lr
+        self.rho = rho
         # self.resample_num_timesteps = 1000
         if consistent_schedule_sampler == "uniform":
             self.consistent_schedule_sampler = UniformSampler(self.num_timesteps)
