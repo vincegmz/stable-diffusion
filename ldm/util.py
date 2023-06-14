@@ -265,4 +265,5 @@ def update_ema(target_params, source_params, rate=0.99):
     :param rate: the EMA rate (closer to 1 means slower).
     """
     for targ, src in zip(target_params, source_params):
-        targ.detach().mul_(rate).add_(src, alpha=1 - rate)
+        if targ.requires_grad and src.requires_grad:
+            targ.detach().mul_(rate).add_(src, alpha=1 - rate)

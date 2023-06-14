@@ -8,7 +8,7 @@ model:
     target_ema_mode: fixed
     scale_mode: fixed 
     total_training_steps: 600000
-    start_ema: 0.0
+    start_ema: 0.95
     start_scales: 40
     end_scales: 40
     consistent_schedule_sampler: uniform
