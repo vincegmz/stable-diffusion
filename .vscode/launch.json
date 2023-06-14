@@ -31,8 +31,17 @@
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal",
-            "args": ["--base","configs/consistent-latent-diffusion/config.yaml", //"--base","configs/autoencoder/autoencoder_kl_64x64x3.yaml"
+            "args": ["--base","configs/consistent-latent-diffusion/consistent_latent.yaml", //"--base","configs/autoencoder/autoencoder_kl_64x64x3.yaml"
             "-t","--gpus","0,"],
+            "justMyCode": true
+        },
+        {
+            "name": "sample_diffusion",
+            "type": "python",
+            "request": "launch",
+            "program": "scripts/sample_diffusion.py",
+            "console": "integratedTerminal",
+            "args": ["--resume", "models/ldm/lsun_beds256/model.ckpt"],
             "justMyCode": true
         }
     ]
