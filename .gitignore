@@ -1,0 +1,4 @@
+models/*
+ckpt/*
+outputs/*
+logs/*

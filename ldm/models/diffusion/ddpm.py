@@ -1399,29 +1399,27 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     def __init__ (self, 
         target_model_config,
         teacher_model_config,
-        use_ema,
         #CD Training Defaults
+        use_ema,
+        start_ema=0.95,
         target_ema_mode="fixed",
         scale_mode="fixed",
         total_training_steps=600000,
-        start_ema=0.0,
         start_scales=40,
         end_scales=40,
         distill_steps_per_iter=50000,
         loss_norm="lpips",
         consistent_schedule_sampler = None,
         # Non Unet Defaults
-        sigma_min=0.002,
-        sigma_max=80.0,
         lr = 0.000008, 
+        rho=7.0,
         ema_rate = "0.999,0.9999,0.9999432189950708",
         weight_schedule="karras",
-        sigma_data: float = 0.5,
-        rho=7.0,
         weight_decay = 0.0,
         resume_checkpoint=False,
         conditioning_key="labels",
         distillation=False,
+        ckpt_path=None,
         *args, **kwargs):
         
         super().__init__(conditioning_key=conditioning_key,*args, **kwargs)
@@ -1430,10 +1428,11 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # Kerras Denoiser parameter used for selecting t and t2
         self.weight_schedule = weight_schedule
         self.weight_decay = weight_decay
-        self.sigma_data = sigma_data
-        self.sigma_max = sigma_max
-        self.sigma_min = sigma_min
-        self.rho = rho
+        # self.sigma_data = sigma_data
+        # self.sigma_max = sigma_max
+        # self.sigma_min = sigma_min
+        # self.rho = rho
+        self.target_ema = start_ema
         self.distillation = distillation
         if loss_norm == "lpips":
             self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
@@ -1443,13 +1442,13 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         self.total_steps = total_training_steps
         self.distill_steps_per_iter = distill_steps_per_iter
         self.lr = lr
-        self.resample_num_timesteps = 40
+        # self.resample_num_timesteps = 1000
         if consistent_schedule_sampler == "uniform":
-            self.consistent_schedule_sampler = UniformSampler(self.resample_num_timesteps)
+            self.consistent_schedule_sampler = UniformSampler(self.num_timesteps)
         elif consistent_schedule_sampler == "loss-second-moment":
-            self.consistent_schedule_sampler = LossSecondMomentResampler(self.resample_num_timesteps)
+            self.consistent_schedule_sampler = LossSecondMomentResampler(self.num_timesteps)
         elif consistent_schedule_sampler == "lognormal":
-            self.consistent_schedule_sample = LogNormalSampler(self.resample_num_timesteps)
+            self.consistent_schedule_sample = LogNormalSampler(self.num_timesteps)
         else:
             raise NotImplementedError(f"unknown schedule sampler: {consistent_schedule_sampler}")
         # self.model = DiffusionWrapper(self.online_config, self.conditioning_key)
@@ -1459,7 +1458,10 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if isinstance(ema_rate, float)
             else [float(x) for x in ema_rate.split(",")]
         )
+        if teacher_model_config:
+            self.instantiate_teacher(teacher_model_config)
 
+        
         if target_model_config:
             self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
             self.target_model.requires_grad_(False)
@@ -1468,27 +1470,32 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             #     self.model_ema = LitEma(self.target_model)
             #     print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
-        if teacher_model_config:
-            self.instantiate_teacher(teacher_model_config)
+  
         # if online_model_config:
         #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
         #     for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
         #         dst.data.copy_(src.data)
         for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
             dst.data.copy_(src.data)
-        # if resume_checkpoint:
-        #     pass
-        # else:
-        #     self.ema_params = [
-        #         copy.deepcopy(list(self.model.parameters()))
-        #         for _ in range(len(self.ema_rate))
-        #     ]
-                
-    def forward(self, x, c, *args, **kwargs):
-    
+        if resume_checkpoint:
+            pass
+        else:
+            self.ema_params = [
+                copy.deepcopy(list(self.model.parameters()))
+                for _ in range(len(self.ema_rate))
+            ]
+        if ckpt_path is not None:
+            self.init_from_ckpt(path = ckpt_path)
 
+
+    def forward(self, x, c, *args, **kwargs):
+        
+        # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        # DDIM Sampling 
+        # t2 = t - 1
+        # resample_t,resample_weights = self.consistent_schedule_sampler.sample(x.shape[0],self.device)
         target_ema, num_scales = self.ema_fn(self.global_step)
-        resample_t,resample_weights = self.consistent_schedule_sampler.sample(x.shape[0],self.device)
+       
         indices = torch.randint(
             0, num_scales-1, (x.shape[0],), device=self.device
         ).long()
@@ -1512,48 +1519,62 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                 tc = self.cond_ids[t].to(self.device)
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
         loss,loss_dict = self.p_losses(x,c,t,t2, *args, **kwargs)
-        loss *= resample_weights
+        # loss *= resample_weights
         prefix = 'train' if self.training else 'val'
         loss_dict.update({f'{prefix}/loss': loss.mean()})
         return loss, loss_dict
 
     def p_losses(self, x_start, cond, t,t2, noise=None):
         dims = len(x_start.shape)
-        ## CHANGE THIS
-        def heun_solver(samples, t, next_t, x0):
-            x = samples
-            if self.teacher_model is None:
-                denoiser = x0
-            else:
-                denoiser = self.denoise(x, t,cond,'teacher')
-            #TODO: check the dimension of samples 
-            d = (x - denoiser) / append_dims(t, dims)
-            samples = x + d * append_dims(next_t - t, dims)
-            if self.teacher_model is None:
-                denoiser = x0
-            else:
-                denoiser = self.denoise(x, next_t,cond,'teacher')
+        # def heun_solver(samples, t, next_t, x0):
+        #     x = samples
+        #     if self.teacher_model is None:
+        #         denoiser = x0
+        #     else:
+        #         denoiser = self.denoise(x, t,cond,'teacher')
+        #     #TODO: check the dimension of samples 
+        #     d = (x - denoiser) / append_dims(t, dims)
+        #     samples = x + d * append_dims(next_t - t, dims)
+        #     if self.teacher_model is None:
+        #         denoiser = x0
+        #     else:
+        #         denoiser = self.denoise(x, next_t,cond,'teacher')
 
-            next_d = (samples - denoiser) / append_dims(next_t, dims)
-            samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
+        #     next_d = (samples - denoiser) / append_dims(next_t, dims)
+        #     samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
 
-            return samples
+        #     return samples
         noise = default(noise, lambda: torch.randn_like(x_start))
-     
-        ## CHANGE THIS
-        x_t = x_start + noise * append_dims(t, dims)
+        x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
+        model_out = self.apply_model(x_t, t,cond,'online')
+        if self.parameterization == "eps":
+            distiller = self.predict_start_from_noise(x_t, t=t, noise=model_out)
+        elif self.parameterization == "x0":
+            distiller = model_out
+        else:
+            raise NotImplementedError()
+        if self.clip_denoised:
+            distiller.clamp_(-1., 1.)
+        # quantize_denoised is false in stable diffusion inference
+        x_t2 = self.p_sample(x_t2,cond,t2,clip_denoised=self.clip_denoised,quantize_denoised=False)
         # latent_diffusion_q_sample x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
-        distiller = self.denoise(x_t, t, cond,'online')
-        x_t2 = heun_solver(x_t, t, t2, x_start)
-        distiller_target = self.denoise(x_t2,t2,cond,'target').detach()
+        # distiller = self.denoise(x_t, t, cond,'online')
+        # x_t2 = heun_solver(x_t, t, t2, x_start)
+        # distiller_target = self.denoise(x_t2,t2,cond,'target').detach()
+        model_out2 = self.apply_model(x_t2, t2,cond,'target').detach()
+        if self.parameterization == "eps":
+            distiller_target = self.predict_start_from_noise(x_t, t=t, noise=model_out)
+        elif self.parameterization == "x0":
+            distiller_target = model_out2
+        else:
+            raise NotImplementedError()
+        if self.clip_denoised:
+            distiller_target.clamp_(-1., 1.)
 
         dims = len(x_start.shape)
      
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
-
-        if self.parameterization != "x0":
-            raise NotImplementedError("Only x0 parameterization is supported for consistency model")
         #LOSS BASED ON Consistent Model
         snrs = t**-2
         weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
@@ -1711,28 +1732,26 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             return x_recon
 
-    def denoise(self, x_t, t,cond,model_type):
+    # def denoise(self, x_t, sigmas,cond,model_type):
 
-        # if not self.distillation:
-        #     c_skip, c_out, c_in = [
-        #         append_dims(x, x_t.ndim) for x in self.get_scalings(sigmas)
-        #     ]
-        # else:
-        #     c_skip, c_out, c_in = [
-        #         append_dims(x, x_t.ndim)
-        #         for x in self.get_scalings_for_boundary_condition(sigmas)
-        #     ]
-        # rescaled_t = 1000 * 0.25 * torch.log(sigmas + 1e-44)
-        # if model_type == 'online':
-        #     model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
-        # elif model_type == 'teacher':
-        #     model_output = self.apply_model(c_in * x_t, rescaled_t, cond,model_type)
-        # elif model_type == 'target':
-        #     model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
-        # denoised = c_out * model_output + c_skip * x_t
-
-        denoised = self.apply_model(x_t, t,cond,model_type)
-        return denoised
+    #     if not self.distillation:
+    #         c_skip, c_out, c_in = [
+    #             append_dims(x, x_t.ndim) for x in self.get_scalings(sigmas)
+    #         ]
+    #     else:
+    #         c_skip, c_out, c_in = [
+    #             append_dims(x, x_t.ndim)
+    #             for x in self.get_scalings_for_boundary_condition(sigmas)
+    #         ]
+    #     rescaled_t = 1000 * 0.25 * torch.log(sigmas + 1e-44)
+    #     if model_type == 'online':
+    #         model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
+    #     elif model_type == 'teacher':
+    #         model_output = self.apply_model(c_in * x_t, rescaled_t, cond,model_type)
+    #     elif model_type == 'target':
+    #         model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
+    #     denoised = c_out * model_output + c_skip * x_t
+    #     return denoised
     
     def get_weightings(self, weight_schedule, snrs, sigma_data):
         if weight_schedule == "snr":
@@ -1748,7 +1767,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             raise NotImplementedError()
         return weightings
-    
     # def get_scalings(self, sigma):
     #     c_skip = self.sigma_data**2 / (sigma**2 + self.sigma_data**2)
     #     c_out = sigma * self.sigma_data / (sigma**2 + self.sigma_data**2) ** 0.5
@@ -1775,7 +1793,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             self._update_target_ema()
     
     def _update_target_ema(self):
-        target_ema, scales = self.ema_scale_fn(self.global_step-1) # check how global_step is updatedafter on-train_batch_end
+        target_ema = self.target_ema
+        # target_ema, scales = self.ema_scale_fn(self.global_step-1) # check how global_step is updatedafter on-train_batch_end
         with torch.no_grad():
             update_ema(
                 self.target_model.parameters(),
@@ -1793,9 +1812,35 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         self.teacher_model.train = disabled_train
         for param in self.teacher_model.parameters():
             param.requires_grad = False
+        # self.init_from_ckpt(only_model='only teacher model')
+
+    def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
+        sd = torch.load(path, map_location="cpu")
+        if "state_dict" in list(sd.keys()):
+            sd = sd["state_dict"]
+        keys = list(sd.keys())
+        for k in keys:
+            for ik in ignore_keys:
+                if k.startswith(ik):
+                    print("Deleting key {} from state_dict.".format(k))
+                    del sd[k]
+        new_dict = {}
+        for k in keys:
+            if k.startswith("model."):
+                new_dict["teacher_"+k] = sd[k]
+            else:
+                new_dict[k] = sd[k]
+        
+        missing, unexpected = self.load_state_dict(new_dict, strict=False) if not only_model else self.teacher_model.load_state_dict(
+            sd, strict=False)
+        print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
+        if len(missing) > 0:
+            print(f"Missing Keys: {missing}")
+        if len(unexpected) > 0:
+            print(f"Unexpected Keys: {unexpected}")
 
     def configure_optimizers(self):
-        lr = self.learning_rate
+        lr = self.lr
         # changed from self.model.parameters() to self.online_model.parameters()
         params = list(self.model.parameters())
         if self.cond_stage_trainable:
