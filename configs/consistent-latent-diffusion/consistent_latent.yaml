@@ -11,12 +11,12 @@ model:
     loss_norm: lpips
     log_every_t: 200
     timesteps: 1000
-    first_stage_key: "jpg"
-    cond_stage_key: "txt"
+    first_stage_key: image
+    cond_stage_key: class_label
     image_size: 64
     channels: 4
     cond_stage_trainable: false
-    conditioning_key: crossattn
+    # conditioning_key: None
     monitor: val/loss_simple_emas
     weight_schedule: uniform
     weight_decay: 0.0
@@ -95,12 +95,11 @@ model:
           dropout: 0.0
         lossconfig:
           target: torch.nn.Identity
-    cond_stage_config:
-      target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+    cond_stage_config: __is_unconditional__
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
+    batch_size: 2
     num_workers: 1
     wrap: false
     train:
