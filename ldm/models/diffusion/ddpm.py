@@ -1400,6 +1400,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         target_model_config,
         teacher_model_config,
         #CD Training Defaults
+        use_ema,
         start_ema=0.95,
         target_ema_mode="fixed",
         scale_mode="fixed",
@@ -1436,11 +1437,11 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         if loss_norm == "lpips":
             self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
         self.loss_norm = loss_norm
+        self.use_ema = use_ema
         self.target_ema_mode = target_ema_mode
         self.total_steps = total_training_steps
         self.distill_steps_per_iter = distill_steps_per_iter
         self.lr = lr
-        self.rho = rho
         # self.resample_num_timesteps = 1000
         if consistent_schedule_sampler == "uniform":
             self.consistent_schedule_sampler = UniformSampler(self.num_timesteps)
@@ -1458,16 +1459,17 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             else [float(x) for x in ema_rate.split(",")]
         )
         if teacher_model_config:
-            self.instantiate_teacher(teacher_model_config)
-
+            # self.instantiate_teacher(teacher_model_config)
+            self.teacher_model = self.model
         
         if target_model_config:
-            self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
-            self.target_model.requires_grad_(False)
-            self.target_model.train()
+            # self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
+            # self.target_model.requires_grad_(False)
+            # self.target_model.train()
             # if self.use_ema:
             #     self.model_ema = LitEma(self.target_model)
             #     print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
+            self.target_model = self.model
 
   
         # if online_model_config:
