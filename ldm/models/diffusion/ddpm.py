@@ -359,11 +359,11 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         _, loss_dict_no_ema = self.shared_step(batch)
-        with self.ema_scope():
-            _, loss_dict_ema = self.shared_step(batch)
-            loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
+        # with self.ema_scope():
+        #     _, loss_dict_ema = self.shared_step(batch)
+        #     loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        # self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
     def on_train_batch_end(self, *args, **kwargs):
         if self.use_ema:
@@ -1410,6 +1410,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         loss_norm="lpips",
         consistent_schedule_sampler = None,
         # Non Unet Defaults
+        sigma_data: float = 0.5,
         lr = 0.000008, 
         rho=7.0,
         ema_rate = "0.999,0.9999,0.9999432189950708",
@@ -1427,7 +1428,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # Kerras Denoiser parameter used for selecting t and t2
         self.weight_schedule = weight_schedule
         self.weight_decay = weight_decay
-        # self.sigma_data = sigma_data
+        self.sigma_data = sigma_data
         # self.sigma_max = sigma_max
         # self.sigma_min = sigma_min
         self.rho = rho
@@ -1567,7 +1568,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # distiller_target = self.denoise(x_t2,t2,cond,'target').detach()
         model_out2 = self.apply_model(x_t2, t2,cond,'target').detach()
         if self.parameterization == "eps":
-            distiller_target = self.predict_start_from_noise(x_t, t=t, noise=model_out)
+            distiller_target = self.predict_start_from_noise(x_t2, t=t2, noise=model_out2)
         elif self.parameterization == "x0":
             distiller_target = model_out2
         else:
@@ -1580,7 +1581,9 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
         #LOSS BASED ON Consistent Model
-        snrs = t**-2
+        alpha_cumprod = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
+        alpha_m1cumprod = 1-alpha_cumprod
+        snrs = alpha_cumprod/alpha_m1cumprod
         weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
         if self.loss_norm == "l1":
             diffs = torch.abs(distiller - distiller_target)
@@ -1617,7 +1620,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
         loss_dict.update({f'{prefix}/loss_simple': loss.mean()})
 
-        return loss, loss_dict
+        return loss.mean(), loss_dict
 
     
     def apply_model(self, x_noisy, t, cond, model_type,return_ids=False):
