@@ -359,11 +359,11 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         _, loss_dict_no_ema = self.shared_step(batch)
-        with self.ema_scope():
-            _, loss_dict_ema = self.shared_step(batch)
-            loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
+        # with self.ema_scope():
+        #     _, loss_dict_ema = self.shared_step(batch)
+        #     loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        # self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
     def on_train_batch_end(self, *args, **kwargs):
         if self.use_ema:
@@ -1400,7 +1400,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         target_model_config,
         teacher_model_config,
         #CD Training Defaults
-        use_ema,
         start_ema=0.95,
         target_ema_mode="fixed",
         scale_mode="fixed",
@@ -1411,6 +1410,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         loss_norm="lpips",
         consistent_schedule_sampler = None,
         # Non Unet Defaults
+        sigma_data: float = 0.5,
         lr = 0.000008, 
         rho=7.0,
         ema_rate = "0.999,0.9999,0.9999432189950708",
@@ -1428,16 +1428,15 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # Kerras Denoiser parameter used for selecting t and t2
         self.weight_schedule = weight_schedule
         self.weight_decay = weight_decay
-        # self.sigma_data = sigma_data
+        self.sigma_data = sigma_data
         # self.sigma_max = sigma_max
         # self.sigma_min = sigma_min
-        # self.rho = rho
+        self.rho = rho
         self.target_ema = start_ema
         self.distillation = distillation
         if loss_norm == "lpips":
             self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
         self.loss_norm = loss_norm
-        self.use_ema = use_ema
         self.target_ema_mode = target_ema_mode
         self.total_steps = total_training_steps
         self.distill_steps_per_iter = distill_steps_per_iter
@@ -1500,16 +1499,14 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         indices = torch.randint(
             0, num_scales-1, (x.shape[0],), device=self.device
         ).long()
+    
+        t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
+            1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+        t = torch.round(t**self.rho).to(torch.int64)
 
-        t = self.sigma_max ** (1 / self.rho) + indices /(num_scales-1)  * (
-            self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
-        )
-        t = t**self.rho
-
-        t2 = self.sigma_max ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
-            self.sigma_min ** (1 / self.rho) - self.sigma_max ** (1 / self.rho)
-        )
-        t2 = t2**self.rho
+        t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+            1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+        t2 = torch.round(t2**self.rho).to(torch.int64)
 
         # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
@@ -1545,6 +1542,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         #     samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
 
         #     return samples
+        
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_out = self.apply_model(x_t, t,cond,'online')
@@ -1557,14 +1555,20 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         if self.clip_denoised:
             distiller.clamp_(-1., 1.)
         # quantize_denoised is false in stable diffusion inference
-        x_t2 = self.p_sample(x_t2,cond,t2,clip_denoised=self.clip_denoised,quantize_denoised=False)
+        def DDIM_solver():
+            alpha_t = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
+            alpha_t_prev = extract_into_tensor(self.alphas_cumprod, t2, x_t.shape)
+            pred_eps = self.apply_model(x_t, t,cond,'teacher').detach()
+            pred_x_prev = torch.sqrt(alpha_t_prev) * ((x_t * 1/torch.sqrt(alpha_t)) + (torch.sqrt((1 - alpha_t_prev)/alpha_t_prev) - torch.sqrt((1 - alpha_t)/alpha_t)) * pred_eps)
+            return pred_x_prev
+        x_t2 = DDIM_solver()
         # latent_diffusion_q_sample x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
         # distiller = self.denoise(x_t, t, cond,'online')
         # x_t2 = heun_solver(x_t, t, t2, x_start)
         # distiller_target = self.denoise(x_t2,t2,cond,'target').detach()
         model_out2 = self.apply_model(x_t2, t2,cond,'target').detach()
         if self.parameterization == "eps":
-            distiller_target = self.predict_start_from_noise(x_t, t=t, noise=model_out)
+            distiller_target = self.predict_start_from_noise(x_t2, t=t2, noise=model_out2)
         elif self.parameterization == "x0":
             distiller_target = model_out2
         else:
@@ -1577,7 +1581,9 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
         #LOSS BASED ON Consistent Model
-        snrs = t**-2
+        alpha_cumprod = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
+        alpha_m1cumprod = 1-alpha_cumprod
+        snrs = alpha_cumprod/alpha_m1cumprod
         weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
         if self.loss_norm == "l1":
             diffs = torch.abs(distiller - distiller_target)
@@ -1614,7 +1620,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
         loss_dict.update({f'{prefix}/loss_simple': loss.mean()})
 
-        return loss, loss_dict
+        return loss.mean(), loss_dict
 
     
     def apply_model(self, x_noisy, t, cond, model_type,return_ids=False):
