@@ -106,11 +106,13 @@ data:
     train:
       target: ldm.data.imagenet.ImageNetTrain
       params:
+        data_root: ~/dataset/ImageNet
         config:
           size: 256
     validation:
       target: ldm.data.imagenet.ImageNetValidation
       params:
+        data_root: ~/dataset/ImageNet
         config:
           size: 256
 

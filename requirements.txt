@@ -1,9 +1,9 @@
-pytorch==1.11.0
-torchvision==0.12.0
-numpy==1.19.2
+torch==1.7.0
+torchvision==0.8.1
+numpy
 albumentations==0.4.3
 diffusers
-opencv-python==4.1.2.30
+opencv-python
 pudb==2019.2
 invisible-watermark
 imageio==2.9.0
@@ -17,7 +17,6 @@ torch-fidelity==0.3.0
 transformers==4.19.2
 torchmetrics==0.6.0
 kornia==0.6
-academictorrents
 piq
 -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
 -e git+https://github.com/openai/CLIP.git@main#egg=clip
