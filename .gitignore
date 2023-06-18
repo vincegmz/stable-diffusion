@@ -2,3 +2,15 @@ models/*
 ckpt/*
 outputs/*
 logs/*
+**/__pycache__/
+**/*.pyc
+outputs/
+src/
+latent_diffusion.egg-info/
+logs/
+**/outputs
+debug/
+adapters/
+pokemon_data/
+inversion_datasets/
+

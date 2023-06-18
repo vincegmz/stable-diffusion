@@ -9,6 +9,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
 import numpy as np
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
@@ -27,6 +28,8 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.nn import append_dims
 from piq import LPIPS
+from ldm.modules.attention import AdapterForward
+
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -65,6 +68,7 @@ class DDPM(pl.LightningModule):
                  cosine_s=8e-3,
                  given_betas=None,
                  original_elbo_weight=0.,
+                 embedding_reg_weight=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
                  l_simple_weight=1.,
                  conditioning_key=None,
@@ -99,6 +103,7 @@ class DDPM(pl.LightningModule):
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
         self.l_simple_weight = l_simple_weight
+        self.embedding_reg_weight = embedding_reg_weight
 
         if monitor is not None:
             self.monitor = monitor
@@ -359,11 +364,16 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         _, loss_dict_no_ema = self.shared_step(batch)
-        # with self.ema_scope():
+        """# with self.ema_scope():
         #     _, loss_dict_ema = self.shared_step(batch)
         #     loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        # self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        # self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)"""
+        with self.ema_scope():
+            _, loss_dict_ema = self.shared_step(batch)
+            loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
+        self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
     def on_train_batch_end(self, *args, **kwargs):
         if self.use_ema:
@@ -428,6 +438,7 @@ class LatentDiffusion(DDPM):
     def __init__(self,
                  first_stage_config,
                  cond_stage_config,
+                 personalization_config,
                  num_timesteps_cond=None,
                  cond_stage_key="image",
                  cond_stage_trainable=False,
@@ -436,7 +447,9 @@ class LatentDiffusion(DDPM):
                  conditioning_key=None,
                  scale_factor=1.0,
                  scale_by_std=False,
+                 train_level=None,
                  *args, **kwargs):
+
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
         self.scale_by_std = scale_by_std
         assert self.num_timesteps_cond <= kwargs['timesteps']
@@ -469,6 +482,26 @@ class LatentDiffusion(DDPM):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
             self.restarted_from_ckpt = True
+
+        self.cond_stage_model.train = disabled_train
+        for param in self.cond_stage_model.parameters():
+            param.requires_grad = False
+
+        self.model.eval()
+        self.model.train = disabled_train
+        for param in self.model.parameters():
+            param.requires_grad = False
+        
+        self.train_level = train_level
+        self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+
+        self.emb_ckpt_counter = 0
+
+        # if self.embedding_manager.is_clip:
+        #     self.cond_stage_model.update_embedding_func(self.embedding_manager)
+
+        for param in self.embedding_manager.embedding_parameters():
+            param.requires_grad = True
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -528,6 +561,15 @@ class LatentDiffusion(DDPM):
             assert config != '__is_unconditional__'
             model = instantiate_from_config(config)
             self.cond_stage_model = model
+            
+    
+    def instantiate_embedding_manager(self, config, embedder):
+        model = instantiate_from_config(config, embedder=embedder)
+
+        if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
+            model.load(config.params.embedding_manager_ckpt)
+        
+        return model
 
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
@@ -553,7 +595,7 @@ class LatentDiffusion(DDPM):
     def get_learned_conditioning(self, c):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                c = self.cond_stage_model.encode(c)
+                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
             else:
@@ -1044,6 +1086,14 @@ class LatentDiffusion(DDPM):
         loss += (self.original_elbo_weight * loss_vlb)
         loss_dict.update({f'{prefix}/loss': loss})
 
+        if self.embedding_reg_weight > 0:
+            loss_embedding_reg = self.embedding_manager.embedding_to_coarse_loss().mean()
+
+            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
+
+            loss += (self.embedding_reg_weight * loss_embedding_reg)
+            loss_dict.update({f'{prefix}/loss': loss})
+
         return loss, loss_dict
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
@@ -1249,10 +1299,14 @@ class LatentDiffusion(DDPM):
         return samples, intermediates
 
 
-    @torch.no_grad()
+    """@torch.no_grad()
     def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
                    quantize_denoised=True, inpaint=True, plot_denoise_rows=False, plot_progressive_rows=True,
-                   plot_diffusion_rows=True, **kwargs):
+                   plot_diffusion_rows=True, **kwargs):"""
+    @torch.no_grad()
+    def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
+                   quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
+                   plot_diffusion_rows=False, **kwargs):
 
         use_ddim = ddim_steps is not None
 
@@ -1310,6 +1364,16 @@ class LatentDiffusion(DDPM):
             if plot_denoise_rows:
                 denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
                 log["denoise_row"] = denoise_grid
+            
+            uc = self.get_learned_conditioning(len(c) * [""])
+            sample_scaled, _ = self.sample_log(cond=c, 
+                                               batch_size=N, 
+                                               ddim=use_ddim, 
+                                               ddim_steps=ddim_steps,
+                                               eta=ddim_eta,                                                 
+                                               unconditional_guidance_scale=5.0,
+                                               unconditional_conditioning=uc)
+            log["samples_scaled"] = self.decode_first_stage(sample_scaled)
 
             if quantize_denoised and not isinstance(self.first_stage_model, AutoencoderKL) and not isinstance(
                     self.first_stage_model, IdentityFirstStage):
@@ -1362,7 +1426,7 @@ class LatentDiffusion(DDPM):
 
     def configure_optimizers(self):
         lr = self.learning_rate
-        params = list(self.model.parameters())
+        """params = list(self.model.parameters())
         if self.cond_stage_trainable:
             print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
             params = params + list(self.cond_stage_model.parameters())
@@ -1370,7 +1434,55 @@ class LatentDiffusion(DDPM):
             print('Diffusion model optimizing logvar')
             params.append(self.logvar)
         opt = torch.optim.AdamW(params, lr=lr)
-        if self.use_scheduler:
+        if self.use_scheduler:"""
+        params = []
+        # which part of the model will unfrozen and will be trained
+        
+        if self.train_level is not None and "unet" in self.train_level:
+            print("training whole unet!")
+            for param in self.model.diffusion_model.parameters():
+                param.requires_grad = True
+            params += list(self.model.diffusion_model.parameters())
+        
+        if self.train_level is not None and "adapter" in self.train_level and "unet" not in self.train_level:
+            print("training adapter")
+            sequential_unfrozed = False
+            ff_unfrozed = False
+            for name, module in self.model.diffusion_model.named_modules():
+                if "adapter" in name:
+                    if type(module) is torch.nn.Sequential:
+                        if not sequential_unfrozed:
+                            sequential_unfrozed = True
+                            print("unfrozing", name)
+                        for param in module.parameters():
+                            param.requires_grad = True
+                    elif type(module) is AdapterForward:
+                        if not ff_unfrozed:
+                            ff_unfrozed = True
+                            print("unfrozing", name)
+                        for param in module.parameters():
+                            param.requires_grad = True
+                            
+            sequential_added = False
+            ff_added = False
+            for name, module in self.model.diffusion_model.named_modules():
+                if "adapter" in name:
+                    if type(module) is torch.nn.Sequential:
+                        if not sequential_added:
+                            sequential_added = True
+                            print("adding", name)
+                        params = params + list(module.parameters())
+                    elif type(module) is AdapterForward:
+                        if not ff_added:
+                            ff_added = True
+                            print("adding", name)
+                        params = params + list(module.parameters())
+        
+        if self.train_level is not None and "embeder" in self.train_level:
+            print("training embedding")  
+            params = params + list(self.embedding_manager.embedding_parameters())            
+        opt = torch.optim.AdamW(params, lr=lr)
+        if False:
             assert 'target' in self.scheduler_config
             scheduler = instantiate_from_config(self.scheduler_config)
 
@@ -1392,7 +1504,30 @@ class LatentDiffusion(DDPM):
         x = nn.functional.conv2d(x, weight=self.colorize)
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
+    @rank_zero_only
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint.clear()
+        print(f"now is saving embedings, global step is {self.global_step}, emb_ckpt_counter is {self.emb_ckpt_counter}")
+        root_path = self.trainer.checkpoint_callback.dirpath
+        
+        if self.global_step > self.emb_ckpt_counter - 2:
+            self.emb_ckpt_counter += 500
+        elif self.global_step > 1000:
+            return
+        
+        if not os.path.isdir(root_path):
+            raise ValueError("checkpoint_callback.dirpath not a dir!")
+        
 
+        if self.train_level is not None:
+            unet = self.model.diffusion_model
+            if "unet" in self.train_level:
+                torch.save(unet.state_dict(), os.path.join(root_path, f'{self.global_step}-unet.pt'))
+            elif "adapter" in self.train_level:
+                unet.save_adapter_to_dir(os.path.join(root_path,f"{self.global_step}-adapters"))
+            if "embeder" in self.train_level:
+                self.embedding_manager.save(os.path.join(root_path, f"embeddings_gs-{self.global_step}.pt"))
+            
 
 
 class ConsistentLatentDiffusion(LatentDiffusion):
@@ -1899,7 +2034,6 @@ class DiffusionWrapper(pl.LightningModule):
             raise NotImplementedError()
 
         return out
-
 
 
 class Layout2ImgDiffusion(LatentDiffusion):

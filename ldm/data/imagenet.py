@@ -118,7 +118,10 @@ class ImageNetBase(Dataset):
             "synsets": np.array(self.synsets),
             "class_label": np.array(self.class_labels),
             "human_label": np.array(self.human_labels),
+<<<<<<< HEAD
             "caption":np.array(['']*len(self.relpaths))
+=======
+>>>>>>> e87962c1c7ad9e0ac1513cccae986e4d4a570fca
         }
 
         if self.process_images:

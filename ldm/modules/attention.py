@@ -42,6 +42,34 @@ class GEGLU(nn.Module):
     def forward(self, x):
         x, gate = self.proj(x).chunk(2, dim=-1)
         return x * F.gelu(gate)
+    
+class AdapterForward(nn.Module):
+    def __init__(self, dim, mid_dim, dim_out=None, act="relu"):
+        super().__init__()
+        dim_out = default(dim_out, dim)
+        assert act in ["relu", "sig", "silu", "ident", "default"]
+        af = None
+        if act == "relu" or act == "default":
+            af = nn.ReLU()
+        elif act == "sig":
+            af = nn.Sigmoid()
+        elif act == "silu":
+            af = nn.SiLU()
+        elif act == "ident":
+            af = nn.Identity()
+        else:
+            print("act")
+            raise
+        self.adp = nn.Sequential(
+            nn.Linear(dim, mid_dim),
+            af,
+            nn.Linear(mid_dim, dim_out)
+        )
+
+    def forward(self, x):
+        return self.adp(x)
+
+
 
 
 class FeedForward(nn.Module):
@@ -194,12 +222,33 @@ class CrossAttention(nn.Module):
 
 
 class BasicTransformerBlock(nn.Module):
-    def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True):
+    def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True, adp_config=None):
         super().__init__()
+        self.inout_adp_config = None
+        self.adp_scale = 1.
+        self.adp_enable = True
+        if adp_config:
+            for config in adp_config:
+                assert config.type == "inout"
+                assert config.din in [ "attn1i", "attn1o", "attn2i", "attn2o", "attn2c", "ffni", "ffno", "transo"]
+                assert config.dout in ["attn1i", "attn2i", "ffni", "transo", "attn2c"]
+                self.inout_adp_config = config
+                self.adp_scale = self.inout_adp_config.scale
+
+        
         self.attn1 = CrossAttention(query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout)  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
         self.attn2 = CrossAttention(query_dim=dim, context_dim=context_dim,
-                                    heads=n_heads, dim_head=d_head, dropout=dropout)  # is self-attn if context is none
+                                    heads=n_heads, dim_head=d_head, dropout=dropout,
+                                    )  # is self-attn if context is none
+        self.adapter_inout = None
+        if self.inout_adp_config:
+            config = self.inout_adp_config
+            if config.din == "attn2c":
+                self.adapter_inout = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
+            else:
+                self.adapter_inout = AdapterForward(dim, config.mid_dim, dim, config.method)
+
         self.norm1 = nn.LayerNorm(dim)
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
@@ -209,10 +258,57 @@ class BasicTransformerBlock(nn.Module):
         return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
 
     def _forward(self, x, context=None):
-        x = self.attn1(self.norm1(x)) + x
-        x = self.attn2(self.norm2(x), context=context) + x
-        x = self.ff(self.norm3(x)) + x
-        return x
+        if self.inout_adp_config and self.adp_enable:
+            din = self.inout_adp_config.din
+            dout = self.inout_adp_config.dout
+            attn1i = x
+            
+            if din == "attn1i":
+                adp = self.adapter_inout(attn1i)
+            if dout == "attn1i":
+                attn1i = adp * self.adp_scale + attn1i
+            
+            attn1o = self.attn1(self.norm1(attn1i))
+            
+            if din == "attn1o":
+                adp = self.adapter_inout(attn1o)
+            attn2i = attn1o + attn1i
+            
+            if din == "attn2i":
+                adp = self.adapter_inout(attn2i)
+            
+            if dout == "attn2i":
+                attn2i = attn2i + adp * self.adp_scale
+            if din == "attn2c":
+                context = context + self.adp_scale * self.adapter_inout(context)
+            attn2o = self.attn2(self.norm2(attn2i), context=context)
+            
+            if din == "attn2o":
+                adp = self.adapter_inout(attn2o)
+            ffni = attn2o + attn2i
+            
+            if din == "ffni":
+                adp = self.adapter_inout(ffni)
+            
+            if dout == "ffni":
+                ffni = adp * self.adp_scale + ffni
+            
+            ffno = self.ff(self.norm3(ffni))
+            if din == "ffno":
+                adp = self.adapter_inout(ffno)
+            
+            transo = ffno + ffni
+            if din == "transo":
+                adp = self.adapter_inout(transo)
+            if dout == "transo":
+                transo = adp * self.adp_scale + transo
+            return transo 
+                
+        else:
+            x = self.attn1(self.norm1(x)) + x
+            x = self.attn2(self.norm2(x), context=context) + x
+            x = self.ff(self.norm3(x)) + x
+            return x
 
 
 class SpatialTransformer(nn.Module):
@@ -224,7 +320,7 @@ class SpatialTransformer(nn.Module):
     Finally, reshape to image
     """
     def __init__(self, in_channels, n_heads, d_head,
-                 depth=1, dropout=0., context_dim=None):
+                 depth=1, dropout=0., context_dim=None, adp_config=None):
         super().__init__()
         self.in_channels = in_channels
         inner_dim = n_heads * d_head
@@ -235,9 +331,19 @@ class SpatialTransformer(nn.Module):
                                  kernel_size=1,
                                  stride=1,
                                  padding=0)
+        
+        def check_config(adp_config):
+            for config in adp_config:
+                assert config.type == "inout"
+                assert type(config.mid_dim) is int
+                assert config.method in ["relu", "sig", "silu", "ident", "default"]
+                assert type(config.scale) == float
+                
+        if adp_config:
+            check_config(adp_config)
 
         self.transformer_blocks = nn.ModuleList(
-            [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim)
+            [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim, adp_config=adp_config)
                 for d in range(depth)]
         )
 
