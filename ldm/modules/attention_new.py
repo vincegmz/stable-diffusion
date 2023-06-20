@@ -244,16 +244,19 @@ class BasicTransformerBlock(nn.Module):
         self.adapter_inout = None
         if self.inout_adp_config:
             config = self.inout_adp_config
-            self.adapter_inout = nn.ModuleDict()
+            self.adapter_inout = {}
             if config.din == "attn2c":
                 self.adapter_inout['online'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
                 self.adapter_inout['target'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
+                self.adapter_inout['target'].requires_grad_ = False
                 self.adapter_inout['ema'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
             else:
                 self.adapter_inout['online'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
                 self.adapter_inout['target'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
                 self.adapter_inout['ema'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
-
+            self.adapter_inout = nn.ModuleDict(self.adapter_inout)
+            self.adapter_inout['ema'].requires_grad_ = False
+            self.adapter_inout['target'].requires_grad_ = False
         self.norm1 = nn.LayerNorm(dim)
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)

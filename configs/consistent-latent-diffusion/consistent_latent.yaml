@@ -22,25 +22,8 @@ model:
     weight_decay: 0.0
     lr: 0.000008
     ema_rate: 0.999,0.9999,0.9999432189950708
-    teacher_model_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
-      params:
-        #use_fp16: true
-        image_size: 32  #32 for channel mult [1,2,4,4]
-        in_channels: 4
-        out_channels: 4
-        model_channels: 320
-        attention_resolutions: [ 4, 2, 1 ]
-        num_res_blocks: 2
-        channel_mult: [ 1, 2, 4, 4 ]
-        num_heads: 8
-        use_spatial_transformer: True
-        transformer_depth: 1
-        context_dim: 768
-        use_checkpoint: True
-        legacy: False
     unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      target: ldm.modules.diffusionmodules.openaimodel_consistent.UNetModel_inject
       params:
         image_size: 32  #32 for channel mult [1,2,4,4]
         in_channels: 4
@@ -55,23 +38,15 @@ model:
         context_dim: 768
         use_checkpoint: True
         legacy: False
+        adapter_config: 
+          transformer_adp_config:
+            - type: inout # inout
+              din: attn2o  # 
+              dout: ffni # 
+              mid_dim: 60
+              method: "default"
+              scale: 1.0 # 
     
-    target_model_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
-      params:
-        image_size: 32  #32 for channel mult [1,2,4,4]
-        in_channels: 4
-        out_channels: 4
-        model_channels: 320
-        attention_resolutions: [ 4, 2, 1 ]
-        num_res_blocks: 2
-        channel_mult: [ 1, 2, 4, 4 ]
-        num_heads: 8
-        use_spatial_transformer: True
-        transformer_depth: 1
-        context_dim: 768
-        use_checkpoint: True
-        legacy: False
     first_stage_config:
       target: ldm.models.autoencoder.AutoencoderKL
       params:

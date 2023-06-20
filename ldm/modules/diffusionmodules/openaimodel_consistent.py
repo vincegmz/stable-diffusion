@@ -8,7 +8,7 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 import os
-from ldm.modules.attention import AdapterForward, CrossAttention, BasicTransformerBlock, FeedForward
+from ldm.modules.attention_new import AdapterForward, CrossAttention, BasicTransformerBlock, FeedForward
 
 from ldm.modules.diffusionmodules.util import (
     checkpoint,
@@ -19,7 +19,7 @@ from ldm.modules.diffusionmodules.util import (
     normalization,
     timestep_embedding,
 )
-from ldm.modules.attention import SpatialTransformer
+from ldm.modules.attention_new import SpatialTransformer
 
 
 # dummy replace
@@ -67,7 +67,7 @@ class TimestepBlock(nn.Module):
     """
 
     @abstractmethod
-    def forward(self, x, emb):
+    def forward(self, x, emb,mode=None):
         """
         Apply the module to `x` given `emb` timestep embeddings.
         """
@@ -79,12 +79,12 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None):
+    def forward(self, x, emb, context=None,mode=None):
         for layer in self:
             if isinstance(layer, TimestepBlock):
-                x = layer(x, emb)
+                x = layer(x, emb,mode=mode)
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context)
+                x = layer(x, context,mode=mode)
             else:
                 x = layer(x)
         return x
@@ -203,7 +203,7 @@ class ResBlock(TimestepBlock):
         self.adp_config = None
         self.adp_enable = True
         self.adp_scale = 1.
-        self.adapter = nn.ModuleDict()
+        self.adapter = {}
         def check_adp_config(adp_config):
             if adp_config:
                 assert adp_config.type == "inout"
@@ -300,7 +300,9 @@ class ResBlock(TimestepBlock):
                     af,
                     conv_nd(dims, self.adp_config.mid_dim, self.channels, 3, padding=1)
                 )
-
+            self.adapter = nn.ModuleDict(self.adapter)
+            self.adapter_inout['ema'].requires_grad_ = False
+            self.adapter_inout['target'].requires_grad_ = False
         self.in_layers = nn.Sequential(
             normalization(channels),
             nn.SiLU(),
@@ -627,7 +629,7 @@ class UNetModel_inject(nn.Module):
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
-
+        
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),

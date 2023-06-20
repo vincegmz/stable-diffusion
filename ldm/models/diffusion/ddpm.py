@@ -28,7 +28,7 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.nn import append_dims
 from piq import LPIPS
-from ldm.modules.attention import AdapterForward
+from ldm.modules.attention_new import AdapterForward
 
 
 __conditioning_keys__ = {'concat': 'c_concat',
