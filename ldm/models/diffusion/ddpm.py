@@ -1951,14 +1951,15 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # target_ema, scales = self.ema_scale_fn(self.global_step-1) # check how global_step is updatedafter on-train_batch_end
         with torch.no_grad():
             update_ema(
-                self.target_params(),
-                self.online_params(),
+                self.target_params,
+                self.online_params,
                 rate=target_ema,
             )
     
     def _update_ema(self):
-        for rate, params in zip(self.ema_rate, self.ema_params):
-            update_ema(params, self.online_params, rate=rate)
+        with torch.no_grad():
+            for rate, params in zip(self.ema_rate, self.ema_params):
+                update_ema(params, self.online_params, rate=rate)
 
     # def instantiate_teacher(self, config):
     #     self.teacher_model = DiffusionWrapper(config, self.conditioning_key)

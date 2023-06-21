@@ -8,6 +8,7 @@ model:
     # use_ema: true
     start_ema: 0.95
     consistent_schedule_sampler: uniform
+    train_level: ["adapter"] 
     loss_norm: l2
     log_every_t: 200
     timesteps: 1000

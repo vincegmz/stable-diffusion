@@ -301,8 +301,14 @@ class ResBlock(TimestepBlock):
                     conv_nd(dims, self.adp_config.mid_dim, self.channels, 3, padding=1)
                 )
             self.adapter = nn.ModuleDict(self.adapter)
-            self.adapter_inout['ema'].requires_grad_ = False
-            self.adapter_inout['target'].requires_grad_ = False
+            m_param = dict(self.adapter['online'].named_parameters())
+            shadow_params = dict(self.adapter['target'].named_parameters())
+            ema_params = dict(self.adapter['ema'].named_parameters())
+            for key in m_param:
+                shadow_params[key].data.copy_(m_param[key].data)
+                ema_params[key].data.copy_(m_param[key].data)
+            self.adapter['ema'].requires_grad_ = False
+            self.adapter['target'].requires_grad_ = False
         self.in_layers = nn.Sequential(
             normalization(channels),
             nn.SiLU(),
@@ -353,7 +359,7 @@ class ResBlock(TimestepBlock):
         :return: an [N x C x ...] Tensor of outputs.
         """
         return checkpoint(
-            self._forward, (x, emb), self.parameters(), self.use_checkpoint
+            self._forward, (x, emb,mode), self.parameters(), self.use_checkpoint
         )
 
 
