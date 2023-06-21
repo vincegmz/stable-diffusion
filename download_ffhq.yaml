@@ -18,8 +18,7 @@ file_mounts:
 # find . -name "*.tar" | xargs -n1 -P8 -I {} bash -c 'mkdir -p "${1%.tar}"; tar -xf "${1}" -C "${1%.tar}"; rm -f "${1}"' -- {}
 # cd ..
 #  gdown 16N0RV4fHI6joBuKbQAoG34V_cQk7vxSA
-#  curl -H "Authorization: Bearer ya29.a0AWY7Ckmw6bLAcjZ2ZRVSmj15XVzm0f51WK8x6SvrAMSZt6PCNNTb08p3asLu5VqIboF00iT6fNtiqKwru-jhr-Op06y99TLhubBfEMKl_82nD2bB2SaXI45EpaGShgvTxmGDayN3sICjvsYpqb8yrPKkYbShaCgYKAcMSARISFQG1tDrpoBXoeXiewYXKzwQttkesDQ0163" 
-#https://www.googleapis.com/drive/v3/files/1QyMnKQ_9PsCma0ghVMopJYwJQA2fgru2?alt=media -o images1024x1024
+# 
 setup: |
   echo "Setting, SkyPilot!"
 run: |
