@@ -104,18 +104,17 @@ data:
     num_workers: 1
     wrap: false
     train:
-      target: ldm.data.imagenet.ImageNetTrain
+      target: ldm.data.cifar10.Cifar10Train
       params:
-        # data_root: /home/ubuntu/dataset/ImageNet
         config:
           size: 256
+        data_root: /home/minzhe_guo/data/cifar-10-batches-py
     validation:
-      target: ldm.data.imagenet.ImageNetValidation
+      target: ldm.data.cifar10.Cifar10Validation
       params:
-        # data_root: /home/ubuntu/dataset/ImageNet
         config:
           size: 256
-
+        data_root: /home/minzhe_guo/data/cifar-10-batches-py
 
 lightning:
   callbacks:
