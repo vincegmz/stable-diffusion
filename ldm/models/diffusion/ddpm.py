@@ -493,8 +493,8 @@ class LatentDiffusion(DDPM):
             param.requires_grad = False
         
         self.train_level = train_level
-        self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
-
+        #self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+        self.embedding_manager = None
         self.emb_ckpt_counter = 0
 
         # if self.embedding_manager.is_clip:
@@ -1532,8 +1532,7 @@ class LatentDiffusion(DDPM):
 
 class ConsistentLatentDiffusion(LatentDiffusion):
     def __init__ (self, 
-        target_model_config,
-        teacher_model_config,
+
         #CD Training Defaults
         start_ema=0.95,
         target_ema_mode="fixed",
@@ -1592,36 +1591,47 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if isinstance(ema_rate, float)
             else [float(x) for x in ema_rate.split(",")]
         )
-        if teacher_model_config:
-            # self.instantiate_teacher(teacher_model_config)
-            self.teacher_model = self.model
+        # if teacher_model_config:
+        #     # self.instantiate_teacher(teacher_model_config)
+        #     self.teacher_model = self.model
         
-        if target_model_config:
-            # self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
-            # self.target_model.requires_grad_(False)
-            # self.target_model.train()
-            # if self.use_ema:
-            #     self.model_ema = LitEma(self.target_model)
-            #     print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
-            self.target_model = self.model
+        # if target_model_config:
+        #     # self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
+        #     # self.target_model.requires_grad_(False)
+        #     # self.target_model.train()
+        #     # if self.use_ema:
+        #     #     self.model_ema = LitEma(self.target_model)
+        #     #     print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
+        #     self.target_model = self.model
 
   
-        # if online_model_config:
-        #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
-        #     for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
-        #         dst.data.copy_(src.data)
-        for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
-            dst.data.copy_(src.data)
-        if resume_checkpoint:
-            pass
-        else:
-            self.ema_params = [
-                copy.deepcopy(list(self.model.parameters()))
-                for _ in range(len(self.ema_rate))
-            ]
+        # # if online_model_config:
+        # #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
+        # #     for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
+        # #         dst.data.copy_(src.data)
+        # for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
+        #     dst.data.copy_(src.data)
+        # if resume_checkpoint:
+        #     pass
+        # else:
+        params = []
+        self.target_params = []
+        self.online_params = []
+        for name, module in self.model.diffusion_model.named_modules():
+            if "adapter"in name:
+                if 'ema' in name:
+                    params = params + list(module.parameters())
+                elif 'online' in name:
+                    self.online_params = self.online_params + list(module.parameters())
+                elif 'target' in name:
+                    self.target_params = self.target_params + list(module.parameters())
+        self.ema_params = [
+            copy.deepcopy(params)
+            for _ in range(len(self.ema_rate))
+        ]
         if ckpt_path is not None:
             self.init_from_ckpt(path = ckpt_path)
-
+        
 
     def forward(self, x, c, *args, **kwargs):
         
@@ -1693,7 +1703,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         def DDIM_solver():
             alpha_t = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
             alpha_t_prev = extract_into_tensor(self.alphas_cumprod, t2, x_t.shape)
-            pred_eps = self.apply_model(x_t, t,cond,'teacher').detach()
+            pred_eps = self.apply_model(x_t, t,cond,None).detach()
             pred_x_prev = torch.sqrt(alpha_t_prev) * ((x_t * 1/torch.sqrt(alpha_t)) + (torch.sqrt((1 - alpha_t_prev)/alpha_t_prev) - torch.sqrt((1 - alpha_t)/alpha_t)) * pred_eps)
             return pred_x_prev
         x_t2 = DDIM_solver()
@@ -1758,7 +1768,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         return loss.mean(), loss_dict
 
     
-    def apply_model(self, x_noisy, t, cond, model_type,return_ids=False):
+    def apply_model(self, x_noisy, t, cond, model_type=None,return_ids=False):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
             pass
@@ -1841,14 +1851,15 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             cond_list = [cond for i in range(z.shape[-1])]  # Todo make this more efficient
 
             # apply model by loop over crops
-            if model_type == 'online':
-                output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
-            elif model_type == 'teacher':
-                output_list = [self.teacher_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
-            elif model_type == 'target':
-                output_list = [self.target_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
-            else:
-                raise NotImplementedError('only online, teacher and target models are implemented')
+            output_list = [self.model(z_list[i], t, **cond_list[i],mode=model_type) for i in range(z.shape[-1])]
+            # if model_type == 'online':
+            #     output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
+            # elif model_type == 'teacher':
+            #     output_list = [self.teacher_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
+            # elif model_type == 'target':
+            #     output_list = [self.target_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
+            # else:
+            #     raise NotImplementedError('only online, teacher and target models are implemented')
             assert not isinstance(output_list[0],
                                 tuple)  # todo cant deal with multiple model outputs check this never happens
 
@@ -1860,14 +1871,15 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             x_recon = fold(o) / normalization
 
         else:
-            if model_type == 'online':
-                x_recon = self.model(x_noisy, t, **cond)
-            elif model_type == 'teacher':
-                x_recon = self.teacher_model(x_noisy, t, **cond)
-            elif model_type == 'target':
-                x_recon = self.target_model(x_noisy, t, **cond)
-            else:
-                raise NotImplementedError('only online, teacher and target are valid model types')
+            x_recon = self.model(x_noisy, t, **cond,mode=model_type)
+            # if model_type == 'online':
+            #     x_recon = self.model(x_noisy, t, **cond)
+            # elif model_type == 'teacher':
+            #     x_recon = self.teacher_model(x_noisy, t, **cond)
+            # elif model_type == 'target':
+            #     x_recon = self.target_model(x_noisy, t, **cond)
+            # else:
+            #     raise NotImplementedError('only online, teacher and target are valid model types')
 
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
@@ -1931,30 +1943,30 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         #load previous ema and update parameters
         # self._update_ema()
         # load current ema and update parameters
-        if self.target_model:
-            self._update_target_ema()
+        self._update_ema()
+        self._update_target_ema()
     
     def _update_target_ema(self):
         target_ema = self.target_ema
         # target_ema, scales = self.ema_scale_fn(self.global_step-1) # check how global_step is updatedafter on-train_batch_end
         with torch.no_grad():
             update_ema(
-                self.target_model.parameters(),
-                self.model.parameters(),
+                self.target_params(),
+                self.online_params(),
                 rate=target_ema,
             )
     
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):
-            update_ema(params, self.model.parameters(), rate=rate)
+            update_ema(params, self.online_params, rate=rate)
 
-    def instantiate_teacher(self, config):
-        self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
-        self.teacher_model.eval()
-        self.teacher_model.train = disabled_train
-        for param in self.teacher_model.parameters():
-            param.requires_grad = False
-        # self.init_from_ckpt(only_model='only teacher model')
+    # def instantiate_teacher(self, config):
+    #     self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
+    #     self.teacher_model.eval()
+    #     self.teacher_model.train = disabled_train
+    #     for param in self.teacher_model.parameters():
+    #         param.requires_grad = False
+    #     # self.init_from_ckpt(only_model='only teacher model')
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
         sd = torch.load(path, map_location="cpu")
@@ -1983,15 +1995,45 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
     def configure_optimizers(self):
         lr = self.lr
+        params = []
         # changed from self.model.parameters() to self.online_model.parameters()
-        params = list(self.model.parameters())
-        if self.cond_stage_trainable:
-            print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
-            params = params + list(self.cond_stage_model.parameters())
-        if self.learn_logvar:
-            print('Diffusion model optimizing logvar')
-            params.append(self.logvar)
-        #changed from AdamW to RAdam  
+        if self.train_level is not None and "adapter" in self.train_level and "unet" not in self.train_level:
+            print("training adapter")
+            sequential_unfrozed = False
+            ff_unfrozed = False
+            for name, module in self.model.diffusion_model.named_modules():
+                if "adapter" and "online" in name:
+                    if type(module) is torch.nn.Sequential:
+                        if not sequential_unfrozed:
+                            sequential_unfrozed = True
+                            print("unfrozing", name)
+                        for param in module.parameters():
+                            param.requires_grad = True
+                    elif type(module) is AdapterForward:
+                        if not ff_unfrozed:
+                            ff_unfrozed = True
+                            print("unfrozing", name)
+                        for param in module.parameters():
+                            param.requires_grad = True
+                            
+            sequential_added = False
+            ff_added = False
+            for name, module in self.model.diffusion_model.named_modules():
+                if "adapter" and "online" in name:
+                    if type(module) is torch.nn.Sequential:
+                        if not sequential_added:
+                            sequential_added = True
+                            print("adding", name)
+                        params = params + list(module.parameters())
+                    elif type(module) is AdapterForward:
+                        if not ff_added:
+                            ff_added = True
+                            print("adding", name)
+                        params = params + list(module.parameters())
+        
+        if self.train_level is not None and "embeder" in self.train_level:
+            print("training embedding")  
+            params = params + list(self.embedding_manager.embedding_parameters())            
         opt = torch.optim.RAdam(params, lr=lr,weight_decay=self.weight_decay)
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
@@ -2014,22 +2056,22 @@ class DiffusionWrapper(pl.LightningModule):
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
 
-    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
+    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None,mode = None):
         if self.conditioning_key is None:
-            out = self.diffusion_model(x, t)
+            out = self.diffusion_model(x, t,mode=mode)
         elif self.conditioning_key == 'concat':
             xc = torch.cat([x] + c_concat, dim=1)
-            out = self.diffusion_model(xc, t)
+            out = self.diffusion_model(xc, t,mode=mode)
         elif self.conditioning_key == 'crossattn':
             cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(x, t, context=cc)
+            out = self.diffusion_model(x, t, context=cc,mode=mode)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(xc, t, context=cc)
+            out = self.diffusion_model(xc, t, context=cc,mode=mode)
         elif self.conditioning_key == 'adm':
             cc = c_crossattn[0]
-            out = self.diffusion_model(x, t, y=cc)
+            out = self.diffusion_model(x, t, y=cc,mode=mode)
         else:
             raise NotImplementedError()
 
