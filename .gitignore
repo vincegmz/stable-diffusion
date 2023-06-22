@@ -2,3 +2,5 @@ models/*
 ckpt/*
 outputs/*
 logs/*
+download_*yaml
+
