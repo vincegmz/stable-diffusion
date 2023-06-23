@@ -438,7 +438,7 @@ class LatentDiffusion(DDPM):
     def __init__(self,
                  first_stage_config,
                  cond_stage_config,
-                 personalization_config,
+                 #personalization_config,
                  num_timesteps_cond=None,
                  cond_stage_key="image",
                  cond_stage_trainable=False,
@@ -448,8 +448,9 @@ class LatentDiffusion(DDPM):
                  scale_factor=1.0,
                  scale_by_std=False,
                  train_level=None,
+                 reg_weight = 1.0,
                  *args, **kwargs):
-
+        self.reg_weight = reg_weight
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
         self.scale_by_std = scale_by_std
         assert self.num_timesteps_cond <= kwargs['timesteps']
@@ -500,8 +501,8 @@ class LatentDiffusion(DDPM):
         # if self.embedding_manager.is_clip:
         #     self.cond_stage_model.update_embedding_func(self.embedding_manager)
 
-        for param in self.embedding_manager.embedding_parameters():
-            param.requires_grad = True
+        # for param in self.embedding_manager.embedding_parameters():
+        #     param.requires_grad = True
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -1086,13 +1087,13 @@ class LatentDiffusion(DDPM):
         loss += (self.original_elbo_weight * loss_vlb)
         loss_dict.update({f'{prefix}/loss': loss})
 
-        if self.embedding_reg_weight > 0:
-            loss_embedding_reg = self.embedding_manager.embedding_to_coarse_loss().mean()
+        # if self.embedding_reg_weight > 0:
+        #     loss_embedding_reg = self.embedding_manager.embedding_to_coarse_loss().mean()
 
-            loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
+        #     loss_dict.update({f'{prefix}/loss_emb_reg': loss_embedding_reg})
 
-            loss += (self.embedding_reg_weight * loss_embedding_reg)
-            loss_dict.update({f'{prefix}/loss': loss})
+        #     loss += (self.embedding_reg_weight * loss_embedding_reg)
+        #     loss_dict.update({f'{prefix}/loss': loss})
 
         return loss, loss_dict
 
