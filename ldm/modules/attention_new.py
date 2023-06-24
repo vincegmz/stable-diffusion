@@ -248,20 +248,18 @@ class BasicTransformerBlock(nn.Module):
             if config.din == "attn2c":
                 self.adapter_inout['online'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
                 self.adapter_inout['target'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
-                self.adapter_inout['target'].requires_grad_ = False
-                self.adapter_inout['ema'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
+
             else:
                 self.adapter_inout['online'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
                 self.adapter_inout['target'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
-                self.adapter_inout['ema'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
+                
             self.adapter_inout = nn.ModuleDict(self.adapter_inout)
             m_param = dict(self.adapter_inout['online'].named_parameters())
             shadow_params = dict(self.adapter_inout['target'].named_parameters())
-            ema_params = dict(self.adapter_inout['ema'].named_parameters())
+            
             for key in m_param:
                 shadow_params[key].data.copy_(m_param[key].data)
-                ema_params[key].data.copy_(m_param[key].data)
-            self.adapter_inout['ema'].requires_grad_ = False
+               
             self.adapter_inout['target'].requires_grad_ = False
             
         self.norm1 = nn.LayerNorm(dim)

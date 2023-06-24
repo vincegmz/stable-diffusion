@@ -248,13 +248,7 @@ class ResBlock(TimestepBlock):
                     af,
                     conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1),
                 )
-                self.adapter['ema'] = nn.Sequential(
-                    normalization(channels),
-                    nn.SiLU(),
-                    conv_nd(dims, channels, self.adp_config.mid_dim, 3, padding=1),
-                    af,
-                    conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1),
-                )
+                
             elif self.adp_config.din == "reso" and self.adp_config.dout == "reso":
                 self.adapter['online'] = nn.Sequential(
                     normalization(self.out_channels),
@@ -270,13 +264,7 @@ class ResBlock(TimestepBlock):
                     af,
                     conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1)
                 )
-                self.adapter['ema'] = nn.Sequential(
-                    normalization(self.out_channels),
-                    nn.SiLU(),
-                    conv_nd(dims, self.out_channels, self.adp_config.mid_dim, 3, padding=1),
-                    af,
-                    conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1)
-                )
+                
 
             elif self.adp_config.din == "resi" and self.adp_config.dout == "resi":
                 self.adapter['online'] = nn.Sequential(
@@ -293,21 +281,13 @@ class ResBlock(TimestepBlock):
                     af,
                     conv_nd(dims, self.adp_config.mid_dim, self.channels, 3, padding=1)
                 )
-                self.adapter['ema'] = nn.Sequential(
-                    normalization(self.channels),
-                    nn.SiLU(),
-                    conv_nd(dims, self.channels, self.adp_config.mid_dim, 3, padding=1),
-                    af,
-                    conv_nd(dims, self.adp_config.mid_dim, self.channels, 3, padding=1)
-                )
+                
             self.adapter = nn.ModuleDict(self.adapter)
             m_param = dict(self.adapter['online'].named_parameters())
             shadow_params = dict(self.adapter['target'].named_parameters())
-            ema_params = dict(self.adapter['ema'].named_parameters())
+            
             for key in m_param:
                 shadow_params[key].data.copy_(m_param[key].data)
-                ema_params[key].data.copy_(m_param[key].data)
-            self.adapter['ema'].requires_grad_ = False
             self.adapter['target'].requires_grad_ = False
         self.in_layers = nn.Sequential(
             normalization(channels),

@@ -1505,29 +1505,29 @@ class LatentDiffusion(DDPM):
         x = nn.functional.conv2d(x, weight=self.colorize)
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
-    @rank_zero_only
-    def on_save_checkpoint(self, checkpoint):
-        checkpoint.clear()
-        print(f"now is saving embedings, global step is {self.global_step}, emb_ckpt_counter is {self.emb_ckpt_counter}")
-        root_path = self.trainer.checkpoint_callback.dirpath
+    # @rank_zero_only
+    # def on_save_checkpoint(self, checkpoint):
+    #     checkpoint.clear()
+    #     print(f"now is saving embedings, global step is {self.global_step}, emb_ckpt_counter is {self.emb_ckpt_counter}")
+    #     root_path = self.trainer.checkpoint_callback.dirpath
         
-        if self.global_step > self.emb_ckpt_counter - 2:
-            self.emb_ckpt_counter += 500
-        elif self.global_step > 1000:
-            return
+    #     if self.global_step > self.emb_ckpt_counter - 2:
+    #         self.emb_ckpt_counter += 500
+    #     elif self.global_step > 1000:
+    #         return
         
-        if not os.path.isdir(root_path):
-            raise ValueError("checkpoint_callback.dirpath not a dir!")
+    #     if not os.path.isdir(root_path):
+    #         raise ValueError("checkpoint_callback.dirpath not a dir!")
         
 
-        if self.train_level is not None:
-            unet = self.model.diffusion_model
-            if "unet" in self.train_level:
-                torch.save(unet.state_dict(), os.path.join(root_path, f'{self.global_step}-unet.pt'))
-            elif "adapter" in self.train_level:
-                unet.save_adapter_to_dir(os.path.join(root_path,f"{self.global_step}-adapters"))
-            if "embeder" in self.train_level:
-                self.embedding_manager.save(os.path.join(root_path, f"embeddings_gs-{self.global_step}.pt"))
+    #     if self.train_level is not None:
+    #         unet = self.model.diffusion_model
+    #         if "unet" in self.train_level:
+    #             torch.save(unet.state_dict(), os.path.join(root_path, f'{self.global_step}-unet.pt'))
+    #         elif "adapter" in self.train_level:
+    #             unet.save_adapter_to_dir(os.path.join(root_path,f"{self.global_step}-adapters"))
+    #         if "embeder" in self.train_level:
+    #             self.embedding_manager.save(os.path.join(root_path, f"embeddings_gs-{self.global_step}.pt"))
             
 
 
@@ -1615,25 +1615,40 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # if resume_checkpoint:
         #     pass
         # else:
-        params = []
+        
+        
+
+        if ckpt_path is not None:
+            self.init_from_ckpt(path = ckpt_path)
         self.target_params = []
         self.online_params = []
         for name, module in self.model.diffusion_model.named_modules():
             if "adapter"in name:
-                if 'ema' in name:
-                    params = params + list(module.parameters())
-                elif 'online' in name:
+                if 'online' in name:
                     self.online_params = self.online_params + list(module.parameters())
                 elif 'target' in name:
                     self.target_params = self.target_params + list(module.parameters())
         self.ema_params = [
-            copy.deepcopy(params)
+            copy.deepcopy(self.online_params)
             for _ in range(len(self.ema_rate))
         ]
-        if ckpt_path is not None:
-            self.init_from_ckpt(path = ckpt_path)
-        
-
+        for i,e in enumerate(self.ema_params):
+            for j,p in enumerate(e):
+                self.register_buffer("ema_{}_{}".format(i,j),p)
+    @contextmanager
+    def ema_scope(self, context=None,idx=0):
+        self.temp_p = copy.deepcopy(self.online_params)
+        for targ, src in zip(self.online_params, self.ema_params[idx]):
+            targ.copy_(src)
+        if context is not None:
+                print(f"{context}: Switched to EMA weights {idx}")
+        try:
+            yield None
+        finally:
+            for targ, src in zip(self.online_params, self.temp_p):
+                targ.copy_(src)
+            if context is not None:
+                    print(f"{context}: Restored training weights")
     def forward(self, x, c, *args, **kwargs):
         
         # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
@@ -1769,7 +1784,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         return loss.mean(), loss_dict
 
     
-    def apply_model(self, x_noisy, t, cond, model_type=None,return_ids=False):
+    def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
             pass
@@ -1987,8 +2002,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             else:
                 new_dict[k] = sd[k]
         
-        missing, unexpected = self.load_state_dict(new_dict, strict=False) if not only_model else self.teacher_model.load_state_dict(
-            sd, strict=False)
+        missing, unexpected = self.load_state_dict(new_dict, strict=False) #if not only_model else self.teacher_model.load_state_dict(
+        #    sd, strict=False)
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
