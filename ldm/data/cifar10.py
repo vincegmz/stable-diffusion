@@ -172,7 +172,7 @@ class Cifar10Base(Dataset):
             self.data = ImagePaths(self.abspaths,
                                    labels=labels,
                                    size=self.size,
-                                   random_crop=self.random_crop,is_cifar10=True
+                                   random_crop=self.random_crop
                                    )
         else:
             self.data = self.abspaths
