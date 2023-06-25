@@ -13,4 +13,5 @@ debug/
 adapters/
 pokemon_data/
 inversion_datasets/
+download_*yaml
 

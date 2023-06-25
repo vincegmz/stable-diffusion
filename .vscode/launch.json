@@ -5,6 +5,26 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "cifar10_test",
+            "type": "python",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": ["--base","configs/consistent-latent-diffusion/cifar10.yaml", //"--base","configs/autoencoder/autoencoder_kl_64x64x3.yaml"
+            "-t","--gpus","0,"],
+            "justMyCode": true
+        },
+
+        {
+            "name": "save_sample_npz",
+            "type": "python",
+            "request": "launch",
+            "program": "scripts/save_sample_npz.py",
+            "console": "integratedTerminal",
+            "args": [ "--prompt","cat","--plms","--f","16"],
+            "justMyCode": true
+        },
+        {
             "name": "Python: txt2img",
             "type": "python",
             "request": "launch",

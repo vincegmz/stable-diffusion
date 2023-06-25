@@ -8,7 +8,6 @@ model:
     # use_ema: true
     start_ema: 0.95
     consistent_schedule_sampler: uniform
-    train_level: ["adapter"] 
     loss_norm: l2
     log_every_t: 200
     timesteps: 1000
@@ -23,8 +22,25 @@ model:
     weight_decay: 0.0
     lr: 0.000008
     ema_rate: 0.999,0.9999,0.9999432189950708
+    teacher_model_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        #use_fp16: true
+        image_size: 32  #32 for channel mult [1,2,4,4]
+        in_channels: 4
+        out_channels: 4
+        model_channels: 320
+        attention_resolutions: [ 4, 2, 1 ]
+        num_res_blocks: 2
+        channel_mult: [ 1, 2, 4, 4 ]
+        num_heads: 8
+        use_spatial_transformer: True
+        transformer_depth: 1
+        context_dim: 768
+        use_checkpoint: True
+        legacy: False
     unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel_consistent.UNetModel_inject
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       params:
         image_size: 32  #32 for channel mult [1,2,4,4]
         in_channels: 4
@@ -39,15 +55,23 @@ model:
         context_dim: 768
         use_checkpoint: True
         legacy: False
-        adapter_config: 
-          transformer_adp_config:
-            - type: inout # inout
-              din: attn2o  # 
-              dout: ffni # 
-              mid_dim: 60
-              method: "default"
-              scale: 1.0 # 
     
+    target_model_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 32  #32 for channel mult [1,2,4,4]
+        in_channels: 4
+        out_channels: 4
+        model_channels: 320
+        attention_resolutions: [ 4, 2, 1 ]
+        num_res_blocks: 2
+        channel_mult: [ 1, 2, 4, 4 ]
+        num_heads: 8
+        use_spatial_transformer: True
+        transformer_depth: 1
+        context_dim: 768
+        use_checkpoint: True
+        legacy: False
     first_stage_config:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
@@ -80,18 +104,17 @@ data:
     num_workers: 1
     wrap: false
     train:
-      target: ldm.data.imagenet.ImageNetTrain
+      target: ldm.data.cifar10.Cifar10Train
       params:
-        # data_root: /home/ubuntu/dataset/ImageNet
         config:
           size: 256
+        data_root: /home/minzhe_guo/data/cifar-10-batches-py
     validation:
-      target: ldm.data.imagenet.ImageNetValidation
+      target: ldm.data.cifar10.Cifar10Validation
       params:
-        # data_root: /home/ubuntu/dataset/ImageNet
         config:
           size: 256
-
+        data_root: /home/minzhe_guo/data/cifar-10-batches-py
 
 lightning:
   callbacks:
