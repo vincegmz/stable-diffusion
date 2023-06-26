@@ -496,16 +496,18 @@ if __name__ == "__main__":
         nowname = _tmp[-1]
     else:
         if opt.name:
-            name = "_" + opt.name
+            name = opt.name
         elif opt.base:
             cfg_fname = os.path.split(opt.base[0])[-1]
             cfg_name = os.path.splitext(cfg_fname)[0]
-            name = "_" + cfg_name
+            name = cfg_name
         else:
             name = ""
-        nowname = now + name + opt.postfix
+        nowname = name + opt.postfix
         logdir = os.path.join(opt.logdir, nowname)
-
+        ckpt_path = os.path.join(opt.logdir, nowname, "checkpoints", "last.ckpt")
+        if os.path.exists(ckpt_path):
+            opt.resume_from_checkpoint = ckpt_path
     ckptdir = os.path.join(logdir, "checkpoints")
     cfgdir = os.path.join(logdir, "configs")
     seed_everything(opt.seed)
@@ -557,8 +559,23 @@ if __name__ == "__main__":
                     "save_dir": logdir,
                 }
             },
+            "tb_logger": {
+                "target": "pytorch_lightning.loggers.TensorBoardLogger",
+                "params": {
+                    "name": "tb_logger",
+                    "save_dir": logdir,
+                }
+            },
+            "cvs_logger": {
+                "target": "pytorch_lightning.loggers.CSVLogger",
+                "params": {
+                    "name": "cvs_logger",
+                    "save_dir": logdir,
+                }
+            },
+            
         }
-        default_logger_cfg = default_logger_cfgs["testtube"]
+        default_logger_cfg = default_logger_cfgs["cvs_logger"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
@@ -632,23 +649,24 @@ if __name__ == "__main__":
         else:
             callbacks_cfg = OmegaConf.create()
 
-        if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
-            print(
-                'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
-            default_metrics_over_trainsteps_ckpt_dict = {
-                'metrics_over_trainsteps_checkpoint':
-                    {"target": 'pytorch_lightning.callbacks.ModelCheckpoint',
-                     'params': {
-                         "dirpath": os.path.join(ckptdir, 'trainstep_checkpoints'),
-                         "filename": "{epoch:06}-{step:09}",
-                         "verbose": True,
-                         'save_top_k': -1,
-                         'every_n_train_steps': 10000,
-                         'save_weights_only': True
-                     }
-                     }
-            }
-            default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
+        # if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
+        print(
+            'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
+        default_metrics_over_trainsteps_ckpt_dict = {
+            'metrics_over_trainsteps_checkpoint':
+                {"target": 'pytorch_lightning.callbacks.ModelCheckpoint',
+                    'params': {
+                        "dirpath": ckptdir,
+                        "filename": "{epoch:06}-{step:09}",
+                        "verbose": True,
+                        'save_top_k': -1,
+                        'every_n_train_steps': 10000,
+                        'save_weights_only': True,
+                        "save_last": True,
+                    }
+                    }
+        }
+        default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
 
         callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
         if 'ignore_keys_callback' in callbacks_cfg and hasattr(trainer_opt, 'resume_from_checkpoint'):
