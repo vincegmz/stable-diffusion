@@ -596,7 +596,7 @@ class LatentDiffusion(DDPM):
     def get_learned_conditioning(self, c):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
+                c = self.cond_stage_model.encode(c)
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
             else:
@@ -1588,7 +1588,9 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             raise NotImplementedError(f"unknown schedule sampler: {consistent_schedule_sampler}")
         # self.model = DiffusionWrapper(self.online_config, self.conditioning_key)
-        self.ema_fn = create_ema_and_scales_fn(target_ema_mode,start_ema,scale_mode, start_scales, end_scales, self.total_steps,self.distill_steps_per_iter)
+        # self.ema_fn = create_ema_and_scales_fn(target_ema_mode,start_ema,scale_mode, start_scales, end_scales, self.total_steps,self.distill_steps_per_iter)
+        ### setting the scale as constant
+        self.num_scales = start_scales
         self.ema_rate = (
             [ema_rate]
             if isinstance(ema_rate, float)
@@ -1633,8 +1635,9 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # DDIM Sampling 
         # t2 = t - 1
         # resample_t,resample_weights = self.consistent_schedule_sampler.sample(x.shape[0],self.device)
-        target_ema, num_scales = self.ema_fn(self.global_step)
+        # target_ema, num_scales = self.ema_fn(self.global_step)
        
+        num_scales = self.num_scales
         indices = torch.randint(
             0, num_scales-1, (x.shape[0],), device=self.device
         ).long()
@@ -1823,6 +1826,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             raise NotImplementedError()
         return weightings
     
+    @rank_zero_only
     def on_train_batch_end(self, *args, **kwargs):
         self._update_ema()
         self._update_target_ema()

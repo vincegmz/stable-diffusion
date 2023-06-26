@@ -166,7 +166,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.dataset_configs = dict()
-        self.num_workers = 0  # Single GPU
+        self.num_workers = 4  # Single GPU
         # self.num_workers = num_workers if num_workers is not None else batch_size * 2
         self.use_worker_init_fn = use_worker_init_fn
         if train is not None:
@@ -275,16 +275,16 @@ class SetupCallback(Callback):
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
                            os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
 
-        else:
-            # ModelCheckpoint callback created log directory --- remove it
-            if not self.resume and os.path.exists(self.logdir):
-                dst, name = os.path.split(self.logdir)
-                dst = os.path.join(dst, "child_runs", name)
-                os.makedirs(os.path.split(dst)[0], exist_ok=True)
-                try:
-                    os.rename(self.logdir, dst)
-                except FileNotFoundError:
-                    pass
+        # else:
+        #     # ModelCheckpoint callback created log directory --- remove it
+        #     if not self.resume and os.path.exists(self.logdir):
+        #         dst, name = os.path.split(self.logdir)
+        #         dst = os.path.join(dst, "child_runs", name)
+        #         os.makedirs(os.path.split(dst)[0], exist_ok=True)
+        #         try:
+        #             os.rename(self.logdir, dst)
+        #         except FileNotFoundError:
+        #             pass
 
 
 class ImageLogger(Callback):
@@ -649,24 +649,24 @@ if __name__ == "__main__":
         else:
             callbacks_cfg = OmegaConf.create()
 
-        # if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
-        print(
-            'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
-        default_metrics_over_trainsteps_ckpt_dict = {
-            'metrics_over_trainsteps_checkpoint':
-                {"target": 'pytorch_lightning.callbacks.ModelCheckpoint',
-                    'params': {
-                        "dirpath": ckptdir,
-                        "filename": "{epoch:06}-{step:09}",
-                        "verbose": True,
-                        'save_top_k': -1,
-                        'every_n_train_steps': 10000,
-                        'save_weights_only': True,
-                        "save_last": True,
-                    }
-                    }
-        }
-        default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
+        if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
+            print(
+                'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
+            default_metrics_over_trainsteps_ckpt_dict = {
+                'metrics_over_trainsteps_checkpoint':
+                    {"target": 'pytorch_lightning.callbacks.ModelCheckpoint',
+                        'params': {
+                            "dirpath": ckptdir,
+                            "filename": "{epoch:06}-{step:09}",
+                            "verbose": True,
+                            'save_top_k': -1,
+                            'every_n_train_steps': 10000,
+                            'save_weights_only': True,
+                            "save_last": True,
+                        }
+                        }
+            }
+            default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
 
         callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
         if 'ignore_keys_callback' in callbacks_cfg and hasattr(trainer_opt, 'resume_from_checkpoint'):
@@ -738,7 +738,7 @@ if __name__ == "__main__":
             try:
                 trainer.fit(model, data)
             except Exception:
-                melk()
+                # melk()
                 raise
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)
