@@ -622,14 +622,14 @@ if __name__ == "__main__":
                     "lightning_config": lightning_config,
                 }
             },
-            "image_logger": {
-                "target": "main_consistent.ImageLogger",
-                "params": {
-                    "batch_frequency": 750,
-                    "max_images": 4,
-                    "clamp": True
-                }
-            },
+            # "image_logger": {
+            #     "target": "main_consistent.ImageLogger",
+            #     "params": {
+            #         "batch_frequency": 750,
+            #         "max_images": 4,
+            #         "clamp": True
+            #     }
+            # },
             "learning_rate_logger": {
                 "target": "main_consistent.LearningRateMonitor",
                 "params": {
@@ -738,8 +738,6 @@ if __name__ == "__main__":
             try:
                 trainer.fit(model, data)
             except Exception:
-                # melk()
-                raise
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)
     except Exception:
