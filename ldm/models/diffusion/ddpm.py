@@ -1665,11 +1665,11 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     
         t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
             1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-        t = torch.round(t**self.rho).to(torch.int64)
+        t = torch.round(t**self.rho).to(torch.int64) - 1
 
         t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
             1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-        t2 = torch.round(t2**self.rho).to(torch.int64)
+        t2 = torch.round(t2**self.rho).to(torch.int64) - 1
 
         # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
@@ -1687,24 +1687,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
     def p_losses(self, x_start, cond, t,t2, noise=None):
         dims = len(x_start.shape)
-        # def heun_solver(samples, t, next_t, x0):
-        #     x = samples
-        #     if self.teacher_model is None:
-        #         denoiser = x0
-        #     else:
-        #         denoiser = self.denoise(x, t,cond,'teacher')
-        #     #TODO: check the dimension of samples 
-        #     d = (x - denoiser) / append_dims(t, dims)
-        #     samples = x + d * append_dims(next_t - t, dims)
-        #     if self.teacher_model is None:
-        #         denoiser = x0
-        #     else:
-        #         denoiser = self.denoise(x, next_t,cond,'teacher')
-
-        #     next_d = (samples - denoiser) / append_dims(next_t, dims)
-        #     samples = x + (d + next_d) * append_dims((next_t - t) / 2, dims)
-
-        #     return samples
         
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
@@ -1725,10 +1707,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             pred_x_prev = torch.sqrt(alpha_t_prev) * ((x_t * 1/torch.sqrt(alpha_t)) + (torch.sqrt((1 - alpha_t_prev)/alpha_t_prev) - torch.sqrt((1 - alpha_t)/alpha_t)) * pred_eps)
             return pred_x_prev
         x_t2 = DDIM_solver()
-        # latent_diffusion_q_sample x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
-        # distiller = self.denoise(x_t, t, cond,'online')
-        # x_t2 = heun_solver(x_t, t, t2, x_start)
-        # distiller_target = self.denoise(x_t2,t2,cond,'target').detach()
         model_out2 = self.apply_model(x_t2, t2,cond,'target').detach()
         if self.parameterization == "eps":
             distiller_target = self.predict_start_from_noise(x_t2, t=t2, noise=model_out2)
@@ -1811,73 +1789,10 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
             z_list = [z[:, :, :, :, i] for i in range(z.shape[-1])]
 
-            # if self.cond_stage_key in ["image", "LR_image", "segmentation",
-            #                            'bbox_img'] and self.model.conditioning_key:  # todo check for completeness
-            #     c_key = next(iter(cond.keys()))  # get key
-            #     c = next(iter(cond.values()))  # get value
-            #     assert (len(c) == 1)  # todo extend to list with more than one elem
-            #     c = c[0]  # get element
-
-            #     c = unfold(c)
-            #     c = c.view((c.shape[0], -1, ks[0], ks[1], c.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
-
-            #     cond_list = [{c_key: [c[:, :, :, :, i]]} for i in range(c.shape[-1])]
-
-            # elif self.cond_stage_key == 'coordinates_bbox':
-            #     assert 'original_image_size' in self.split_input_params, 'BoudingBoxRescaling is missing original_image_size'
-
-            #     # assuming padding of unfold is always 0 and its dilation is always 1
-            #     n_patches_per_row = int((w - ks[0]) / stride[0] + 1)
-            #     full_img_h, full_img_w = self.split_input_params['original_image_size']
-            #     # as we are operating on latents, we need the factor from the original image size to the
-            #     # spatial latent size to properly rescale the crops for regenerating the bbox annotations
-            #     num_downs = self.first_stage_model.encoder.num_resolutions - 1
-            #     rescale_latent = 2 ** (num_downs)
-
-            #     # get top left postions of patches as conforming for the bbbox tokenizer, therefore we
-            #     # need to rescale the tl patch coordinates to be in between (0,1)
-            #     tl_patch_coordinates = [(rescale_latent * stride[0] * (patch_nr % n_patches_per_row) / full_img_w,
-            #                              rescale_latent * stride[1] * (patch_nr // n_patches_per_row) / full_img_h)
-            #                             for patch_nr in range(z.shape[-1])]
-
-            #     # patch_limits are tl_coord, width and height coordinates as (x_tl, y_tl, h, w)
-            #     patch_limits = [(x_tl, y_tl,
-            #                      rescale_latent * ks[0] / full_img_w,
-            #                      rescale_latent * ks[1] / full_img_h) for x_tl, y_tl in tl_patch_coordinates]
-            #     # patch_values = [(np.arange(x_tl,min(x_tl+ks, 1.)),np.arange(y_tl,min(y_tl+ks, 1.))) for x_tl, y_tl in tl_patch_coordinates]
-
-            #     # tokenize crop coordinates for the bounding boxes of the respective patches
-            #     patch_limits_tknzd = [torch.LongTensor(self.bbox_tokenizer._crop_encoder(bbox))[None].to(self.device)
-            #                           for bbox in patch_limits]  # list of length l with tensors of shape (1, 2)
-            #     print(patch_limits_tknzd[0].shape)
-            #     # cut tknzd crop position from conditioning
-            #     assert isinstance(cond, dict), 'cond must be dict to be fed into model'
-            #     cut_cond = cond['c_crossattn'][0][..., :-2].to(self.device)
-            #     print(cut_cond.shape)
-
-            #     adapted_cond = torch.stack([torch.cat([cut_cond, p], dim=1) for p in patch_limits_tknzd])
-            #     adapted_cond = rearrange(adapted_cond, 'l b n -> (l b) n')
-            #     print(adapted_cond.shape)
-            #     adapted_cond = self.get_learned_conditioning(adapted_cond)
-            #     print(adapted_cond.shape)
-            #     adapted_cond = rearrange(adapted_cond, '(l b) n d -> l b n d', l=z.shape[-1])
-            #     print(adapted_cond.shape)
-
-            #     cond_list = [{'c_crossattn': [e]} for e in adapted_cond]
-
-            # else:
             cond_list = [cond for i in range(z.shape[-1])]  # Todo make this more efficient
 
             # apply model by loop over crops
             output_list = [self.model(z_list[i], t, **cond_list[i],mode=model_type) for i in range(z.shape[-1])]
-            # if model_type == 'online':
-            #     output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
-            # elif model_type == 'teacher':
-            #     output_list = [self.teacher_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
-            # elif model_type == 'target':
-            #     output_list = [self.target_model(z_list[i], t, **cond_list) for i in range(z.shape[-1])]
-            # else:
-            #     raise NotImplementedError('only online, teacher and target models are implemented')
             assert not isinstance(output_list[0],
                                 tuple)  # todo cant deal with multiple model outputs check this never happens
 
@@ -1890,14 +1805,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
         else:
             x_recon = self.model(x_noisy, t, **cond,mode=model_type)
-            # if model_type == 'online':
-            #     x_recon = self.model(x_noisy, t, **cond)
-            # elif model_type == 'teacher':
-            #     x_recon = self.teacher_model(x_noisy, t, **cond)
-            # elif model_type == 'target':
-            #     x_recon = self.target_model(x_noisy, t, **cond)
-            # else:
-            #     raise NotImplementedError('only online, teacher and target are valid model types')
 
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
@@ -1939,34 +1846,13 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             raise NotImplementedError()
         return weightings
-    # def get_scalings(self, sigma):
-    #     c_skip = self.sigma_data**2 / (sigma**2 + self.sigma_data**2)
-    #     c_out = sigma * self.sigma_data / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     return c_skip, c_out, c_in
-
-    # def get_scalings_for_boundary_condition(self, sigma):
-    #     c_skip = self.sigma_data**2 / (
-    #         (sigma - self.sigma_min) ** 2 + self.sigma_data**2
-    #     )
-    #     c_out = (
-    #         (sigma - self.sigma_min)
-    #         * self.sigma_data
-    #         / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     )
-    #     c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     return c_skip, c_out, c_in
     
     def on_train_batch_end(self, *args, **kwargs):
-        #load previous ema and update parameters
-        # self._update_ema()
-        # load current ema and update parameters
         self._update_ema()
         self._update_target_ema()
     
     def _update_target_ema(self):
         target_ema = self.target_ema
-        # target_ema, scales = self.ema_scale_fn(self.global_step-1) # check how global_step is updatedafter on-train_batch_end
         with torch.no_grad():
             update_ema(
                 self.target_params,
@@ -1975,6 +1861,10 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             )
     
     def _update_ema(self):
+        for ema_param in self.ema_params:
+            for e_p, online_p in zip(ema_param, self.online_params):
+                if e_p.device != online_p.device and online_p.device.index == 0:
+                    e_p.data = e_p.to(device = online_p.device)
         with torch.no_grad():
             for rate, params in zip(self.ema_rate, self.ema_params):
                 update_ema(params, self.online_params, rate=rate)
