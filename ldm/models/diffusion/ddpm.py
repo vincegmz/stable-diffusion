@@ -1593,31 +1593,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             [ema_rate]
             if isinstance(ema_rate, float)
             else [float(x) for x in ema_rate.split(",")]
-        )
-        # if teacher_model_config:
-        #     # self.instantiate_teacher(teacher_model_config)
-        #     self.teacher_model = self.model
-        
-        # if target_model_config:
-        #     # self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
-        #     # self.target_model.requires_grad_(False)
-        #     # self.target_model.train()
-        #     # if self.use_ema:
-        #     #     self.model_ema = LitEma(self.target_model)
-        #     #     print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
-        #     self.target_model = self.model
-
-  
-        # # if online_model_config:
-        # #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
-        # #     for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
-        # #         dst.data.copy_(src.data)
-        # for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
-        #     dst.data.copy_(src.data)
-        # if resume_checkpoint:
-        #     pass
-        # else:
-        
+        )       
         
 
         if ckpt_path is not None:
@@ -1887,15 +1863,14 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                 if k.startswith(ik):
                     print("Deleting key {} from state_dict.".format(k))
                     del sd[k]
-        new_dict = {}
-        for k in keys:
-            if k.startswith("model."):
-                new_dict["teacher_"+k] = sd[k]
-            else:
-                new_dict[k] = sd[k]
+        # new_dict = {}
+        # for k in keys:
+        #     if k.startswith("model."):
+        #         new_dict["teacher_"+k] = sd[k]
+        #     else:
+        #         new_dict[k] = sd[k]
         
-        missing, unexpected = self.load_state_dict(new_dict, strict=False) #if not only_model else self.teacher_model.load_state_dict(
-        #    sd, strict=False)
+        missing, unexpected = self.load_state_dict(sd, strict=False) #if not only_model else self.teacher_model.load_state_dict(sd, strict=False)
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
