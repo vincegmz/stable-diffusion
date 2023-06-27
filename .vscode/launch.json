@@ -52,7 +52,7 @@
             "program": "main_consistent.py",
             "console": "integratedTerminal",
             "args": ["--base","configs/consistent-latent-diffusion/consistent_latent_cifar10.yaml", //"--base","configs/autoencoder/autoencoder_kl_64x64x3.yaml"
-            "-t","--gpus","0,1,2,3", "-l", "/home/ubuntu/exp/stablediffusion/", "-n", "test1"],
+            "-t","--gpus","0,1,2,3", "-l", "/home/ubuntu/exp/stablediffusion/", "-n", "test2"],
             "justMyCode": true
         },
         {

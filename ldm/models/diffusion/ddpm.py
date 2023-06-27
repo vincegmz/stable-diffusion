@@ -1540,7 +1540,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         start_ema=0.95,
         target_ema_mode="fixed",
         scale_mode="fixed",
-        total_training_steps=600000,
+        # total_training_steps=600000,
         start_scales=40,
         end_scales=40,
         distill_steps_per_iter=50000,
@@ -1575,7 +1575,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
         self.loss_norm = loss_norm
         self.target_ema_mode = target_ema_mode
-        self.total_steps = total_training_steps
+        # self.total_steps = total_training_steps
         self.distill_steps_per_iter = distill_steps_per_iter
         self.lr = lr
         # self.resample_num_timesteps = 1000
@@ -1790,27 +1790,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             return x_recon
 
-    # def denoise(self, x_t, sigmas,cond,model_type):
-
-    #     if not self.distillation:
-    #         c_skip, c_out, c_in = [
-    #             append_dims(x, x_t.ndim) for x in self.get_scalings(sigmas)
-    #         ]
-    #     else:
-    #         c_skip, c_out, c_in = [
-    #             append_dims(x, x_t.ndim)
-    #             for x in self.get_scalings_for_boundary_condition(sigmas)
-    #         ]
-    #     rescaled_t = 1000 * 0.25 * torch.log(sigmas + 1e-44)
-    #     if model_type == 'online':
-    #         model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
-    #     elif model_type == 'teacher':
-    #         model_output = self.apply_model(c_in * x_t, rescaled_t, cond,model_type)
-    #     elif model_type == 'target':
-    #         model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
-    #     denoised = c_out * model_output + c_skip * x_t
-    #     return denoised
-    
     def get_weightings(self, weight_schedule, snrs, sigma_data):
         if weight_schedule == "snr":
             weightings = snrs
@@ -1849,13 +1828,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             for rate, params in zip(self.ema_rate, self.ema_params):
                 update_ema(params, self.online_params, rate=rate)
 
-    # def instantiate_teacher(self, config):
-    #     self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
-    #     self.teacher_model.eval()
-    #     self.teacher_model.train = disabled_train
-    #     for param in self.teacher_model.parameters():
-    #         param.requires_grad = False
-    #     # self.init_from_ckpt(only_model='only teacher model')
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
         sd = torch.load(path, map_location="cpu")
@@ -1867,12 +1839,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                 if k.startswith(ik):
                     print("Deleting key {} from state_dict.".format(k))
                     del sd[k]
-        # new_dict = {}
-        # for k in keys:
-        #     if k.startswith("model."):
-        #         new_dict["teacher_"+k] = sd[k]
-        #     else:
-        #         new_dict[k] = sd[k]
         
         missing, unexpected = self.load_state_dict(sd, strict=False) #if not only_model else self.teacher_model.load_state_dict(sd, strict=False)
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")

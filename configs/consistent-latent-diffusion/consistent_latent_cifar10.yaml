@@ -18,7 +18,7 @@ model:
     channels: 4
     cond_stage_trainable: false
     conditioning_key: crossattn
-    monitor: val/loss_simple_emas
+    monitor: val/loss_simple_ema
     weight_schedule: uniform
     weight_decay: 0.0
     lr: 0.000008
@@ -105,3 +105,4 @@ lightning:
 
   trainer:
     benchmark: True
+    max_epochs: 40
