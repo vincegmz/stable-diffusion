@@ -1,17 +1,20 @@
 import torch
 import numpy as np 
 from .random_util import get_generator
-
+from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like, \
+    extract_into_tensor
+from ldm.util import default
+import torch.nn
 class ConsistentSolverSampler(object):
-    def __init__(self, model,   training_mode="edm",
+    def __init__(self, model, training_mode="edm",
         generator="determ",
         clip_denoised=True,
         num_samples=10000,
         batch_size=16,
         sampler="heun",
         diffusion_rho=7,
-        sigma_max=0.002,
-        sigma_min=80,
+        sigma_max=80,
+        sigma_min=0.002,
         s_churn=0.0,
         s_tmin=0.0,
         s_tmax=float("inf"),
@@ -19,7 +22,7 @@ class ConsistentSolverSampler(object):
         steps=40,
         model_path="",
         seed=42,
-        ts="", **kwargs):
+        ts="0,22,39", **kwargs):
         super().__init__()
         self.model = model
         to_torch = lambda x: x.clone().detach().to(torch.float32).to(model.device)
@@ -36,13 +39,11 @@ class ConsistentSolverSampler(object):
         self.steps = steps
         self.model_path = model_path
         self.seed = seed
-        self.ts = ts
+        self.ts = tuple(int(x) for x in ts.split(","))
         self.training_mode = training_mode
         self.diffusion_rho = diffusion_rho
         self.sigma_max = sigma_max
         self.sigma_min = sigma_min
-
-    
 
     def register_buffer(self, name, attr):
         if type(attr) == torch.Tensor:
@@ -50,6 +51,29 @@ class ConsistentSolverSampler(object):
                 attr = attr.to(torch.device("cuda"))
         setattr(self, name, attr)
 
+    def make_schedule(self):
+        alphas_cumprod = self.model.alphas_cumprod
+        assert alphas_cumprod.shape[0] == self.model.num_timesteps #'alphas have to be defined for each timestep'
+        to_torch = lambda x: x.clone().detach().to(torch.float32).to(self.model.device)
+
+        self.register_buffer('betas', to_torch(self.model.betas))
+        self.register_buffer('alphas_cumprod', to_torch(alphas_cumprod))
+        self.register_buffer('alphas_cumprod_prev', to_torch(self.model.alphas_cumprod_prev))
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.register_buffer('sqrt_alphas_cumprod', to_torch(np.sqrt(alphas_cumprod.cpu())))
+        self.register_buffer('sqrt_one_minus_alphas_cumprod', to_torch(np.sqrt(1. - alphas_cumprod.cpu())))
+        self.register_buffer('log_one_minus_alphas_cumprod', to_torch(np.log(1. - alphas_cumprod.cpu())))
+        self.register_buffer('sqrt_recip_alphas_cumprod', to_torch(np.sqrt(1. / alphas_cumprod.cpu())))
+        self.register_buffer('sqrt_recipm1_alphas_cumprod', to_torch(np.sqrt(1. / alphas_cumprod.cpu() - 1)))
+
+
+    @torch.no_grad()
+    def q_sample(self, x_start, t, noise=None):
+        noise = default(noise, lambda: torch.randn_like(x_start))
+        return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
+                extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
+    
     @torch.no_grad()
     def sample(self,
                S,
@@ -74,121 +98,85 @@ class ConsistentSolverSampler(object):
         # sampling
         C, H, W = shape
         size = (batch_size, C, H, W)
-
+        self.make_schedule()
         # print(f'Data shape for DPM-Solver sampling is {size}, sampling steps {S}')
 
         device = self.model.betas.device
-        x = karras_sample(self.model,
-            (self.batch_size, 3, self.image_size, self.image_size),
-            steps=self.steps,
-            device=device,
-            clip_denoised=self.clip_denoised,
-            sampler=self.sampler,
-            sigma_min=self.sigma_min,
-            sigma_max=self.sigma_max,
-            s_churn=self.s_churn,
-            s_tmin=self.s_tmin,
-            s_tmax=self.s_tmax,
-            s_noise=self.s_noise,
-            generator=self.generator,
-            ts=self.ts,
+        x = self.karras_sample(
+            size,
+            device,
             conditions = conditioning)
         
         return x.to(device), None
+    def karras_sample(self,
+        shape,
+        device,
+        conditions = None,
+    ):
 
-def karras_sample(
-    model,
-    shape,
-    steps=40,
-    clip_denoised=True,
-    progress=False,
-    callback=None,
-    device=None,
-    sigma_min=0.002,
-    sigma_max=80,  # higher for highres?
-    rho=7.0,
-    sampler="heun",
-    s_churn=0.0,
-    s_tmin=0.0,
-    s_tmax=float("inf"),
-    s_noise=1.0,
-    diffusion_rho = 7,
-    generator=None,
-    x_T = None,
-    ts=None,
-    conditions = None,
-):
+        # if generator is None:
+        #     generator = get_generator("dummy")
 
-    if generator is None:
-        generator = get_generator("dummy")
+        x_T = torch.randn(*shape, device=device)
+        # x_T should be multiplied by sigma_max?
+        # x_T = generator.randn(*shape,device = device)*sigma_max
 
-    if sampler == "progdist":
-        sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, rho, device=device)
-    else:
-        sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, rho, device=device)
+        sample_fn = self.stochastic_iterative_sampler
 
-    x_T = generator.randn(*shape, device=device) * sigma_max
+        if self.sampler == "multistep":
+            sampler_self = dict(
+                ts=self.ts, t_min=self.sigma_min, t_max=self.sigma_max, rho=self.diffusion_rho, steps=self.steps
+            )
+        else:
+            raise NotImplementedError('only multistep consistent sampling supported')
 
-    sample_fn = stochastic_iterative_sampler
+        # def denoiser(x_t, sigma):
+        #     noise = self.model.apply_model(x_t,sigma,conditions)
 
-    if sampler in ["heun", "dpm"]:
-        sampler_self = dict(
-            s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise
+        #     if self.clip_denoised:
+        #         distiller_target.clamp_(-1., 1.)
+        #     _, denoised = self.model.apply_model(x_t, sigma, conditions)
+        #     if self.clip_denoised:
+        #         denoised = denoised.clamp(-1, 1)
+        #     return denoised
+        
+        x_0 = sample_fn(
+            x_T,
+            conditions,
+            **sampler_self,
         )
-    elif sampler == "multistep":
-        sampler_self = dict(
-            ts=ts, t_min=sigma_min, t_max=sigma_max, rho=diffusion_rho, steps=steps
-        )
-    else:
-        sampler_self = {}
+        return x_0.clamp(-1, 1)
 
-    def denoiser(x_t, sigma):
-        _, denoised = model.apply_model(x_t, sigma, conditions)
-        if clip_denoised:
-            denoised = denoised.clamp(-1, 1)
-        return denoised
+    @torch.no_grad()
+    def stochastic_iterative_sampler(self,
+        x,
+        conditions,
+        ts = None,
+        t_min=0.002,
+        t_max=80.0,
+        rho=7.0,
+        steps=40,
+    ):
+        t_max_rho = t_max ** (1 / rho)
+        t_min_rho = t_min ** (1 / rho)
+        s_in = x.new_ones([x.shape[0]])
 
-    x_0 = sample_fn(
-        denoiser,
-        x_T,
-        sigmas,
-        generator,
-        progress=progress,
-        **sampler_self,
-    )
-    return x_0.clamp(-1, 1)
+        for i in range(len(ts) - 1):
+            t = (t_max_rho + ts[i] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
+            t = round(t)- 1
+            out = self.model.apply_model(x, t * s_in,conditions,'online')
+            if self.model.parameterization == "eps":
+                x0= self.model.predict_start_from_noise(x, t=(t*s_in).to(torch.int64), noise=out)
+            elif self.parameterization == "x0":
+                x0 = out
+            else:
+                raise NotImplementedError()
+            next_t = (t_max_rho + ts[i + 1] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
+            next_t = round(next_t) - 1
+            next_t = np.clip(next_t, t_min, t_max)
+            x = self.model.q_sample(x0,(next_t*s_in).to(torch.int64))
 
-@torch.no_grad()
-def stochastic_iterative_sampler(
-    distiller,
-    x,
-    sigmas,
-    generator,
-    ts,
-    progress=False,
-    callback=None,
-    t_min=0.002,
-    t_max=80.0,
-    rho=7.0,
-    steps=40,
-):
-    t_max_rho = t_max ** (1 / rho)
-    t_min_rho = t_min ** (1 / rho)
-    s_in = x.new_ones([x.shape[0]])
+        return x
 
-    for i in range(len(ts) - 1):
-        t = (t_max_rho + ts[i] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
-        x0 = distiller(x, t * s_in)
-        next_t = (t_max_rho + ts[i + 1] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
-        next_t = np.clip(next_t, t_min, t_max)
-        x = x0 + generator.randn_like(x) * np.sqrt(next_t**2 - t_min**2)
 
-    return x
-
-def get_sigmas_karras(n, sigma_min, sigma_max, rho=7.0, device="cpu"):
-    """Constructs the noise schedule of Karras et al. (2022)."""
-    ramp = torch.linspace(0, 1, n)
-    min_inv_rho = sigma_min ** (1 / rho)
-    max_inv_rho = sigma_max ** (1 / rho)
-    sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
-    return torch.cat([sigmas, sigmas.new_zeros([1])]).to(device)
+    
