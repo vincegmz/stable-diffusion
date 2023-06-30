@@ -23,6 +23,7 @@ from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from transformers import AutoFeatureExtractor
 
+from ldm.models.diffusion.consistent_solver.consistent_sampler import ConsistentSolverSampler
 
 # load safety model
 safety_model_id = "CompVis/stable-diffusion-safety-checker"
@@ -47,7 +48,7 @@ def numpy_to_pil(images):
     return pil_images
 
 
-def load_model_from_config(config, ckpt, verbose=False):
+def load_model_from_config(config, ckpt, verbose=False,idx = 0):
     print(f"Loading model from {ckpt}")
     pl_sd = torch.load(ckpt, map_location="cpu")
     if "global_step" in pl_sd:
@@ -55,6 +56,12 @@ def load_model_from_config(config, ckpt, verbose=False):
     sd = pl_sd["state_dict"]
     model = instantiate_from_config(config.model)
     m, u = model.load_state_dict(sd, strict=False)
+    # ema_params = model.ema_parameters
+    # for key in list(sd.keys()):
+    #     key_split = key.split('_')
+    #     if len(key_split) == 2 and key_split[0] == 'ema':
+    #         padded_key = "{:03}".format(int(key_split[-1]))
+    #         ema_params[idx][padded_key] = sd[key]
     if len(m) > 0 and verbose:
         print("missing keys:")
         print(m)
@@ -133,6 +140,11 @@ def main():
         "--plms",
         action='store_true',
         help="use plms sampling",
+    )
+    parser.add_argument(
+        "--consistent",
+        action='store_true',
+        help = 'use multistep consistent sampling'
     )
     parser.add_argument(
         "--dpm_solver",
@@ -247,15 +259,16 @@ def main():
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
 
-    seed_everything(opt.seed)
+    # seed_everything(opt.seed)
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
-
-    if opt.dpm_solver:
+    if opt.consistent:
+        sampler = ConsistentSolverSampler(model,sampler = 'multistep')
+    elif opt.dpm_solver:
         sampler = DPMSolverSampler(model)
     elif opt.plms:
         sampler = PLMSSampler(model)
@@ -296,7 +309,7 @@ def main():
     num_iterations = opt.dataset_size//batch_size+1
     with torch.no_grad():
         with precision_scope("cuda"):
-            with model.ema_scope():
+            with model.ema_scope(idx = 0):
                 tic = time.time()
                 all_samples = list()
                 for n in trange(num_iterations, desc="Sampling"):
