@@ -21,7 +21,7 @@
             "request": "launch",
             "program": "scripts/save_sample_npz.py",
             "console": "integratedTerminal",
-            "args": [ "--prompt","cat","--plms","--f","16"],
+            "args": [ "--prompt","cat", "--seed", "10", "--consistent", "--f", "16", "--ckpt", "/home/ubuntu/exp/stablediffusion/cifar10_exp1/checkpoints/last.ckpt", "--config", "/home/ubuntu/stable-diffusion/configs/consistent-latent-diffusion/consistent_latent_cifar10.yaml"],
             "justMyCode": true
         },
         {
