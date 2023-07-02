@@ -8,21 +8,14 @@ import logging
 # Keep the import below for registering all model definitions
 import evaluation
 from torch.utils import tensorboard
-from torchvision.utils import make_grid, save_image
-from utils import save_checkpoint, restore_checkpoint
 from absl import app
 from absl import flags
-from ml_collections.config_flags import config_flags
 import glob
-import OmegaConf
+from omegaconf import OmegaConf
 import argparse
-FLAGS = flags.FLAGS
-config_flags.DEFINE_config_file(
-  "config", None, "Training configuration.", lock_config=True)
-flags.DEFINE_string("workdir", None, "Work directory.")
-flags.DEFINE_string("eval_folder", "eval",
-                    "The folder name for storing evaluation results")
-flags.mark_flags_as_required(["workdir", "config", "eval_folder"])
+from PIL import Image
+
+
 def evaluate(config,
              workdir,
              eval_folder="eval"):
@@ -44,7 +37,7 @@ def evaluate(config,
   for ckpt in range(begin_ckpt, config.eval.end_ckpt + 1):
     # Generate samples and compute IS/FID/KID when enabled
     logging.info(eval_dir)
-    sample_dir = os.path.join(eval_dir, f"ckpt_{ckpt}_host_*")
+    sample_dir = eval_dir
     dirs = glob.glob(sample_dir)
     if len(dirs) == 0:
       break
@@ -57,6 +50,14 @@ def evaluate(config,
         logging.info(f"evaluation -- ckpt: {ckpt}, round: {r}")
         # Read samples to disk or Google Cloud Storage
         samples = np.load(sample_path, "wb")['samples']
+        # resize size of synthetic images to that of dataset
+        resized_samples = np.empty((0,config.data.image_size,config.data.image_size,3))
+        if config.data.output_size != config.data.image_size:
+          for i in range(samples.shape[0]):
+            img = Image.fromarray(samples[i])
+            resized_samples = np.concatenate([resized_samples,
+                                              np.expand_dims(np.array(img.resize([config.data.image_size]*2)),axis = 0)],axis = 0)
+        samples = resized_samples
         # Force garbage collection before calling TensorFlow code for Inception network
         gc.collect()
         latents = evaluation.run_inception_distributed(samples, inception_model,
@@ -92,9 +93,42 @@ def evaluate(config,
       io_buffer = io.BytesIO()
       np.savez_compressed(io_buffer, fid=fid)
       f.write(io_buffer.getvalue())
-def main(argv):
+def compute_dataset_stats(config):
+    '''
+    run inception model on the dataset, store the latents[pool_3]
+    Input: dataset_path
+    output None
+    '''
+    dataset_path = os.path.join(config.data.data_root,'imgs')
+    if not os.path.isdir(dataset_path):
+      raise FileNotFoundError('Incorrect data path')
+    dataset = np.empty((0,config.data.image_size,config.data.image_size,3))
+    count = 0
+    for file in os.listdir(dataset_path):
+      if count == config.eval.num_samples:
+         break
+      img = Image.open(os.path.join(dataset_path,file))
+      dataset = np.concatenate([dataset,np.expand_dims(np.array(img),0)],axis = 0)
+      count+=1
+
+    dataset = np.array(dataset)
+    gc.collect()
+    inceptionv3 = config.data.image_size >= 256
+    latents = evaluation.run_inception_distributed(dataset, evaluation.get_inception_model(inceptionv3=inceptionv3),
+                                                        inceptionv3=inceptionv3)
+    with tf.io.gfile.GFile(os.path.join(config.data.data_root, f"statistics_cifar.npz"), "wb") as fout:
+          io_buffer = io.BytesIO()
+          np.savez_compressed(
+            io_buffer, pool_3=latents["pool_3"])
+          fout.write(io_buffer.getvalue())
+def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config_path',type = str,default ='scripts/fid_config.yaml')
+    parser.add_argument('--config_path',type = str,default ='configs/eval/eval.yaml')
     args = parser.parse_args()
     config = OmegaConf.load(args.config_path)
-    evaluate(config, config.work_dir,config.eval)
+    compute_dataset_stats(config)
+    evaluate(config, config.work_dir,config.eval.eval_folder)
+
+if __name__ == "__main__":
+   main()
+

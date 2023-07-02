@@ -1,0 +1,11 @@
+data:
+  image_size: 32
+  data_root: '/home/minzhe_guo/Downloads/cifar-10-batches-py'
+  output_size: 256
+  dataset: CIFAR10
+eval:
+  begin_ckpt: 20
+  end_ckpt: 20
+  num_samples: 9
+  eval_folder: outputs/txt2img-samples
+work_dir: '/home/minzhe_guo/Documents/GitHub/stable2'
