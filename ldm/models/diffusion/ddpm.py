@@ -359,11 +359,11 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         _, loss_dict_no_ema = self.shared_step(batch)
-        # with self.ema_scope():
-        #     _, loss_dict_ema = self.shared_step(batch)
-        #     loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
+        with self.ema_scope():
+            _, loss_dict_ema = self.shared_step(batch)
+            loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        # self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
     def on_train_batch_end(self, *args, **kwargs):
         if self.use_ema:
@@ -1453,7 +1453,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             raise NotImplementedError(f"unknown schedule sampler: {consistent_schedule_sampler}")
         # self.model = DiffusionWrapper(self.online_config, self.conditioning_key)
-        self.ema_fn = create_ema_and_scales_fn(target_ema_mode,start_ema,scale_mode, start_scales, end_scales, self.total_steps,self.distill_steps_per_iter)
+        self.num_scales = start_scales
         self.ema_rate = (
             [ema_rate]
             if isinstance(ema_rate, float)
@@ -1464,16 +1464,14 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         
         if target_model_config:
             self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
-            self.target_model.requires_grad_(False)
-            self.target_model.train()
 
   
         # if online_model_config:
         #     self.online_model = DiffusionWrapper(online_model_config, self.conditioning_key)
         #     for dst, src in zip(self.target_model.parameters(), self.online_model.parameters()):
         #         dst.data.copy_(src.data)
-        for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
-            dst.data.copy_(src.data)
+        # for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
+        #     dst.data.copy_(src.data)
 
         if ckpt_path is not None:
             self.init_from_ckpt(path = ckpt_path)
@@ -1506,8 +1504,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # DDIM Sampling 
         # t2 = t - 1
         # resample_t,resample_weights = self.consistent_schedule_sampler.sample(x.shape[0],self.device)
-        target_ema, num_scales = self.ema_fn(self.global_step)
-       
+        # target_ema, num_scales = self.ema_fn(self.global_step)
+        num_scales = self.num_scales
         indices = torch.randint(
             0, num_scales-1, (x.shape[0],), device=self.device
         ).long()
@@ -1660,61 +1658,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
             z_list = [z[:, :, :, :, i] for i in range(z.shape[-1])]
 
-            # if self.cond_stage_key in ["image", "LR_image", "segmentation",
-            #                            'bbox_img'] and self.model.conditioning_key:  # todo check for completeness
-            #     c_key = next(iter(cond.keys()))  # get key
-            #     c = next(iter(cond.values()))  # get value
-            #     assert (len(c) == 1)  # todo extend to list with more than one elem
-            #     c = c[0]  # get element
-
-            #     c = unfold(c)
-            #     c = c.view((c.shape[0], -1, ks[0], ks[1], c.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
-
-            #     cond_list = [{c_key: [c[:, :, :, :, i]]} for i in range(c.shape[-1])]
-
-            # elif self.cond_stage_key == 'coordinates_bbox':
-            #     assert 'original_image_size' in self.split_input_params, 'BoudingBoxRescaling is missing original_image_size'
-
-            #     # assuming padding of unfold is always 0 and its dilation is always 1
-            #     n_patches_per_row = int((w - ks[0]) / stride[0] + 1)
-            #     full_img_h, full_img_w = self.split_input_params['original_image_size']
-            #     # as we are operating on latents, we need the factor from the original image size to the
-            #     # spatial latent size to properly rescale the crops for regenerating the bbox annotations
-            #     num_downs = self.first_stage_model.encoder.num_resolutions - 1
-            #     rescale_latent = 2 ** (num_downs)
-
-            #     # get top left postions of patches as conforming for the bbbox tokenizer, therefore we
-            #     # need to rescale the tl patch coordinates to be in between (0,1)
-            #     tl_patch_coordinates = [(rescale_latent * stride[0] * (patch_nr % n_patches_per_row) / full_img_w,
-            #                              rescale_latent * stride[1] * (patch_nr // n_patches_per_row) / full_img_h)
-            #                             for patch_nr in range(z.shape[-1])]
-
-            #     # patch_limits are tl_coord, width and height coordinates as (x_tl, y_tl, h, w)
-            #     patch_limits = [(x_tl, y_tl,
-            #                      rescale_latent * ks[0] / full_img_w,
-            #                      rescale_latent * ks[1] / full_img_h) for x_tl, y_tl in tl_patch_coordinates]
-            #     # patch_values = [(np.arange(x_tl,min(x_tl+ks, 1.)),np.arange(y_tl,min(y_tl+ks, 1.))) for x_tl, y_tl in tl_patch_coordinates]
-
-            #     # tokenize crop coordinates for the bounding boxes of the respective patches
-            #     patch_limits_tknzd = [torch.LongTensor(self.bbox_tokenizer._crop_encoder(bbox))[None].to(self.device)
-            #                           for bbox in patch_limits]  # list of length l with tensors of shape (1, 2)
-            #     print(patch_limits_tknzd[0].shape)
-            #     # cut tknzd crop position from conditioning
-            #     assert isinstance(cond, dict), 'cond must be dict to be fed into model'
-            #     cut_cond = cond['c_crossattn'][0][..., :-2].to(self.device)
-            #     print(cut_cond.shape)
-
-            #     adapted_cond = torch.stack([torch.cat([cut_cond, p], dim=1) for p in patch_limits_tknzd])
-            #     adapted_cond = rearrange(adapted_cond, 'l b n -> (l b) n')
-            #     print(adapted_cond.shape)
-            #     adapted_cond = self.get_learned_conditioning(adapted_cond)
-            #     print(adapted_cond.shape)
-            #     adapted_cond = rearrange(adapted_cond, '(l b) n d -> l b n d', l=z.shape[-1])
-            #     print(adapted_cond.shape)
-
-            #     cond_list = [{'c_crossattn': [e]} for e in adapted_cond]
-
-            # else:
             cond_list = [cond for i in range(z.shape[-1])]  # Todo make this more efficient
 
             # apply model by loop over crops
@@ -1751,26 +1694,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             return x_recon
 
-    # def denoise(self, x_t, sigmas,cond,model_type):
-
-    #     if not self.distillation:
-    #         c_skip, c_out, c_in = [
-    #             append_dims(x, x_t.ndim) for x in self.get_scalings(sigmas)
-    #         ]
-    #     else:
-    #         c_skip, c_out, c_in = [
-    #             append_dims(x, x_t.ndim)
-    #             for x in self.get_scalings_for_boundary_condition(sigmas)
-    #         ]
-    #     rescaled_t = 1000 * 0.25 * torch.log(sigmas + 1e-44)
-    #     if model_type == 'online':
-    #         model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
-    #     elif model_type == 'teacher':
-    #         model_output = self.apply_model(c_in * x_t, rescaled_t, cond,model_type)
-    #     elif model_type == 'target':
-    #         model_output = self.apply_model(c_in * x_t, rescaled_t,cond,model_type)
-    #     denoised = c_out * model_output + c_skip * x_t
-    #     return denoised
     
     def get_weightings(self, weight_schedule, snrs, sigma_data):
         if weight_schedule == "snr":
@@ -1786,23 +1709,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             raise NotImplementedError()
         return weightings
-    # def get_scalings(self, sigma):
-    #     c_skip = self.sigma_data**2 / (sigma**2 + self.sigma_data**2)
-    #     c_out = sigma * self.sigma_data / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     return c_skip, c_out, c_in
-
-    # def get_scalings_for_boundary_condition(self, sigma):
-    #     c_skip = self.sigma_data**2 / (
-    #         (sigma - self.sigma_min) ** 2 + self.sigma_data**2
-    #     )
-    #     c_out = (
-    #         (sigma - self.sigma_min)
-    #         * self.sigma_data
-    #         / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     )
-    #     c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
-    #     return c_skip, c_out, c_in
     
     @rank_zero_only
     def on_train_batch_end(self, *args, **kwargs):
@@ -1862,11 +1768,11 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
     def configure_optimizers(self):
         lr = self.lr
-        # changed from self.model.parameters() to self.online_model.parameters()
-        params = list(self.model.parameters())
+        params = list(self.model.diffusion_model.parameters())
         if self.cond_stage_trainable:
             print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
             params = params + list(self.cond_stage_model.parameters())
+        params = params + list(self.target_model.diffusion_model.parameters())
         if self.learn_logvar:
             print('Diffusion model optimizing logvar')
             params.append(self.logvar)
