@@ -9,11 +9,11 @@ resources:
 # workdir: .
 
 file_mounts:
-  # ~/dataset:
-  #   name: dm-dataset # Make sure it is unique or you own this bucket name
-  #   store: s3 # Could be either of [s3, gcs, r2]. Defaults to None.
-  #   persistent: True  # Set to False to delete the bucket after the task is done. Defaults to True.
-  #   mode: MOUNT  # MOUNT or COPY. Defaults to MOUNT if not specified
+  ~/dataset:
+    name: dm-dataset # Make sure it is unique or you own this bucket name
+    store: s3 # Could be either of [s3, gcs, r2]. Defaults to None.
+    persistent: True  # Set to False to delete the bucket after the task is done. Defaults to True.
+    mode: MOUNT  # MOUNT or COPY. Defaults to MOUNT if not specified
   ~/exp:
     name: dm-exps # Make sure it is unique or you own this bucket name
     store: s3 # Could be either of [s3, gcs, r2]. Defaults to None.
