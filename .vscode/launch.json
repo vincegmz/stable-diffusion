@@ -30,7 +30,7 @@
             "request": "launch",
             "program": "scripts/txt2img.py",
             "console": "integratedTerminal",
-            "args": [ "--prompt","a photograph of an astronaut riding a horse","--plms","--f","16"],
+            "args": [ "--prompt","a photograph of an astronaut riding a horse","--plms","--H","32","--W","32"],
             "justMyCode": true
         },
 
@@ -52,7 +52,7 @@
             "program": "main.py",
             "console": "integratedTerminal",
             "args": ["--base","configs/consistent-latent-diffusion/consistent_latent.yaml", //"--base","configs/autoencoder/autoencoder_kl_64x64x3.yaml"
-            "-t","--gpus","0,"],
+            "-t","--gpus","0,","-l", "/home/ubuntu/exp/stablediffusion/test_full_tuning/"],
             "justMyCode": true
         },
         {

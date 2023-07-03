@@ -1460,17 +1460,12 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             else [float(x) for x in ema_rate.split(",")]
         )
         if teacher_model_config:
-            # self.instantiate_teacher(teacher_model_config)
-            self.teacher_model = self.model
+            self.instantiate_teacher(teacher_model_config)
         
         if target_model_config:
-            # self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
-            # self.target_model.requires_grad_(False)
-            # self.target_model.train()
-            # if self.use_ema:
-            #     self.model_ema = LitEma(self.target_model)
-            #     print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
-            self.target_model = self.model
+            self.target_model = DiffusionWrapper(target_model_config, self.conditioning_key)
+            self.target_model.requires_grad_(False)
+            self.target_model.train()
 
   
         # if online_model_config:
@@ -1479,17 +1474,32 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         #         dst.data.copy_(src.data)
         for dst, src in zip(self.target_model.parameters(), self.model.parameters()):
             dst.data.copy_(src.data)
-        if resume_checkpoint:
-            pass
-        else:
-            self.ema_params = [
-                copy.deepcopy(list(self.model.parameters()))
-                for _ in range(len(self.ema_rate))
-            ]
+
         if ckpt_path is not None:
             self.init_from_ckpt(path = ckpt_path)
-
-
+        self.target_params = list(self.target_model.diffusion_model.parameters())
+        self.online_params = list(self.model.diffusion_model.parameters())
+        self.ema_params = [
+            copy.deepcopy(self.online_params)
+            for _ in range(len(self.ema_rate))
+        ]
+        for i,e in enumerate(self.ema_params):
+            for j,p in enumerate(e):
+                self.register_buffer("ema_{}_{}".format(i,j),p)
+    @contextmanager
+    def ema_scope(self, context=None,idx=0):
+        self.temp_p = copy.deepcopy(self.online_params)
+        for targ, src in zip(self.online_params, self.ema_params[idx]):
+            targ.copy_(src)
+        if context is not None:
+                print(f"{context}: Switched to EMA weights {idx}")
+        try:
+            yield None
+        finally:
+            for targ, src in zip(self.online_params, self.temp_p):
+                targ.copy_(src)
+            if context is not None:
+                    print(f"{context}: Restored training weights")
     def forward(self, x, c, *args, **kwargs):
         
         # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
@@ -1794,26 +1804,28 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     #     c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
     #     return c_skip, c_out, c_in
     
+    @rank_zero_only
     def on_train_batch_end(self, *args, **kwargs):
-        #load previous ema and update parameters
-        # self._update_ema()
-        # load current ema and update parameters
-        if self.target_model:
-            self._update_target_ema()
+        self._update_ema()
+        self._update_target_ema()
     
     def _update_target_ema(self):
         target_ema = self.target_ema
-        # target_ema, scales = self.ema_scale_fn(self.global_step-1) # check how global_step is updatedafter on-train_batch_end
         with torch.no_grad():
             update_ema(
-                self.target_model.parameters(),
-                self.model.parameters(),
+                self.target_params,
+                self.online_params,
                 rate=target_ema,
             )
     
     def _update_ema(self):
-        for rate, params in zip(self.ema_rate, self.ema_params):
-            update_ema(params, self.model.parameters(), rate=rate)
+        for ema_param in self.ema_params:
+            for e_p, online_p in zip(ema_param, self.online_params):
+                if e_p.device != online_p.device and online_p.device.index == 0:
+                    e_p.data = e_p.to(device = online_p.device)
+        with torch.no_grad():
+            for rate, params in zip(self.ema_rate, self.ema_params):
+                update_ema(params, self.online_params, rate=rate)
 
     def instantiate_teacher(self, config):
         self.teacher_model = DiffusionWrapper(config, self.conditioning_key)
