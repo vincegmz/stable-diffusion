@@ -108,13 +108,13 @@ data:
       params:
         config:
           size: 256
-        data_root: /home/minzhe_guo/data/cifar-10-batches-py
+        data_root: /home/ubuntu/dataset/cifar-10-batches-py
     validation:
       target: ldm.data.cifar10.Cifar10Validation
       params:
         config:
           size: 256
-        data_root: /home/minzhe_guo/data/cifar-10-batches-py
+        data_root: /home/ubuntu/dataset/cifar-10-batches-py
 
 lightning:
   callbacks:
