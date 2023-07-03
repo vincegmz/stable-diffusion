@@ -26,7 +26,6 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.nn import append_dims
-from piq import LPIPS
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -1437,7 +1436,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         self.target_ema = start_ema
         self.distillation = distillation
         if loss_norm == "lpips":
-            self.lpips_loss = LPIPS(replace_pooling=True, reduction="none")
+            self.lpips_loss = None #LPIPS(replace_pooling=True, reduction="none")
         self.loss_norm = loss_norm
         self.target_ema_mode = target_ema_mode
         self.total_steps = total_training_steps
