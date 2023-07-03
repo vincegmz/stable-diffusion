@@ -37,3 +37,6 @@ setup: |
 # Invoked under the workdir (i.e., can use its files).
 run: |
   echo "Hello, SkyPilot!"
+  conda activate ldm
+  cd ~/stable-diffusion
+  python main.py --base configs/consistent-latent-diffusion/consistent_latent.yaml -t --gpus "0,1,2,3,4,5,6,7" -l home/ubuntu/exp/stablediffusion/test_full_tuning/
