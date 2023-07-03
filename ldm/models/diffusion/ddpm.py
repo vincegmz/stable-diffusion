@@ -1629,13 +1629,15 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                 targ.copy_(src)
             if context is not None:
                     print(f"{context}: Restored training weights")
+    
+    
     def forward(self, x, c, *args, **kwargs):
         
-        # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
-        # DDIM Sampling 
-        # t2 = t - 1
-        # resample_t,resample_weights = self.consistent_schedule_sampler.sample(x.shape[0],self.device)
-        # target_ema, num_scales = self.ema_fn(self.global_step)
+        ## test code
+        # import cv2
+        # batch_image = self.decode_first_stage(x)[3]
+        # batch_image = ((batch_image + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()
+        # cv2.imwrite("test.png", batch_image[:, :, ::-1])
        
         num_scales = self.num_scales
         indices = torch.randint(
@@ -1663,15 +1665,44 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         prefix = 'train' if self.training else 'val'
         loss_dict.update({f'{prefix}/loss': loss.mean()})
         return loss, loss_dict
+    
+    def DDIM_solver(self, x_t, t, t2, cond):
+        alpha_t = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
+        alpha_t_prev = extract_into_tensor(self.alphas_cumprod, t2, x_t.shape)
+        pred_eps = self.apply_model(x_t, t,cond,None).detach()
+        pred_x_prev = torch.sqrt(alpha_t_prev) * ((x_t * 1/torch.sqrt(alpha_t)) + (torch.sqrt((1 - alpha_t_prev)/alpha_t_prev) - torch.sqrt((1 - alpha_t)/alpha_t)) * pred_eps)
+        return pred_x_prev
 
     def p_losses(self, x_start, cond, t,t2, noise=None):
-        dims = len(x_start.shape)
+        ## test
+        # import cv2
+        # index = 6
+        # timestep = 999
+        # batch_image = self.decode_first_stage(x_start)[index]
+        # batch_image = ((batch_image + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()
+        # cv2.imwrite("test_0.png", batch_image[:, :, ::-1])
+        # t = torch.ones((8, ), dtype=torch.int64).cuda()*timestep
+        # x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
+        # batch_image = self.decode_first_stage(x_t)[index]
+        # batch_image = ((batch_image + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()
+        # cv2.imwrite("test_t.png", batch_image[:, :, ::-1])
+        # model_out = self.apply_model(x_t, t,cond, None)
+        # im_out = self.decode_first_stage(model_out)[index]
+        # im_out = ((im_out + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()        
+        # cv2.imwrite("test_out.png", im_out[:, :, ::-1])
         
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_out = self.apply_model(x_t, t,cond,'online')
+        
+        weights_diffusion, weights_consistency = self.get_weightings(self.weight_schedule)
+        loss_diffusion = self.get_loss(model_out, noise, mean=True)
+        
+        ## reparameterize stable diffusion model so that when t = 0, it predict the accurate noise
+        model_out[t == 0] = noise[t == 0]
+        
         if self.parameterization == "eps":
-            distiller = self.predict_start_from_noise(x_t, t=t, noise=model_out)
+            distiller = self.predict_start_from_noise(x_t, t=t, noise= model_out )
         elif self.parameterization == "x0":
             distiller = model_out
         else:
@@ -1679,13 +1710,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         if self.clip_denoised:
             distiller.clamp_(-1., 1.)
         # quantize_denoised is false in stable diffusion inference
-        def DDIM_solver():
-            alpha_t = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
-            alpha_t_prev = extract_into_tensor(self.alphas_cumprod, t2, x_t.shape)
-            pred_eps = self.apply_model(x_t, t,cond,None).detach()
-            pred_x_prev = torch.sqrt(alpha_t_prev) * ((x_t * 1/torch.sqrt(alpha_t)) + (torch.sqrt((1 - alpha_t_prev)/alpha_t_prev) - torch.sqrt((1 - alpha_t)/alpha_t)) * pred_eps)
-            return pred_x_prev
-        x_t2 = DDIM_solver()
+
+        x_t2 = self.DDIM_solver(x_t, t, t2, cond)
         model_out2 = self.apply_model(x_t2, t2,cond,'target').detach()
         if self.parameterization == "eps":
             distiller_target = self.predict_start_from_noise(x_t2, t=t2, noise=model_out2)
@@ -1704,13 +1730,13 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         alpha_cumprod = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
         alpha_m1cumprod = 1-alpha_cumprod
         snrs = alpha_cumprod/alpha_m1cumprod
-        weights = self.get_weightings(self.weight_schedule, snrs, self.sigma_data)
+        
         if self.loss_norm == "l1":
             diffs = torch.abs(distiller - distiller_target)
-            loss = mean_flat(diffs) * weights
+            loss_consistency = mean_flat(diffs).mean()
         elif self.loss_norm == "l2":
             diffs = (distiller - distiller_target) ** 2
-            loss = mean_flat(diffs) * weights
+            loss_consistency = mean_flat(diffs).mean()
         elif self.loss_norm == "l2-32":
             distiller = F.interpolate(distiller, size=32, mode="bilinear")
             distiller_target = F.interpolate(
@@ -1719,7 +1745,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                 mode="bilinear",
             )
             diffs = (distiller - distiller_target) ** 2
-            loss = mean_flat(diffs) * weights
+            loss_consistency = mean_flat(diffs).mean()
         elif self.loss_norm == "lpips":
             if x_start.shape[-1] < 256:
                 distiller = F.interpolate(distiller, size=224, mode="bilinear")
@@ -1727,20 +1753,21 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                     distiller_target, size=224, mode="bilinear"
                 )
 
-            loss = (
+            loss_consistency = (
                 self.lpips_loss(
                     (distiller + 1) / 2.0,
                     (distiller_target + 1) / 2.0,
                 )
-                * weights
-            )
+            
+            ).mean()
         else:
             raise ValueError(f"Unknown loss norm {self.loss_norm}")
         
-
-        loss_dict.update({f'{prefix}/loss_simple': loss.mean()})
-
-        return loss.mean(), loss_dict
+        
+        loss_dict.update({f'{prefix}/loss_consistency': loss_consistency})
+        loss_dict.update({f'{prefix}/loss_diffusion': loss_diffusion})
+        loss_dict.update({f'{prefix}/loss': loss_consistency * weights_consistency + loss_diffusion * weights_diffusion})
+        return loss_dict['loss'], loss_dict
 
     
     def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
@@ -1790,20 +1817,13 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             return x_recon
 
-    def get_weightings(self, weight_schedule, snrs, sigma_data):
-        if weight_schedule == "snr":
-            weightings = snrs
-        elif weight_schedule == "snr+1":
-            weightings = snrs + 1
-        elif weight_schedule == "karras":
-            weightings = snrs + 1.0 / sigma_data**2
-        elif weight_schedule == "truncated-snr":
-            weightings = torch.clamp(snrs, min=1.0)
-        elif weight_schedule == "uniform":
-            weightings = torch.ones_like(snrs)
+    def get_weightings(self, weight_schedule):
+        if weight_schedule == "uniform":
+            weights_consistency = torch.tensor([1.], device=self.device)
+            weights_diffusion = torch.tensor([1.], device=self.device)
         else:
             raise NotImplementedError()
-        return weightings
+        return weights_diffusion, weights_consistency
     
     @rank_zero_only
     def on_train_batch_end(self, *args, **kwargs):
