@@ -30,7 +30,7 @@
             "request": "launch",
             "program": "scripts/save_sample_npz.py",
             "console": "integratedTerminal",
-            "args": [ "--prompt", "", "--seed", "11", "--consistent", "--ckpt", "/home/ubuntu/checkpoints/epoch=000019.ckpt", "--config", "/home/ubuntu/stable-diffusion/configs/consistent-latent-diffusion/consistent_latent_cifar10.yaml"],
+            "args": [ "--prompt", "", "--seed", "11", "--ckpt", "/home/ubuntu/checkpoints/epoch=000019.ckpt", "--config", "/home/ubuntu/stable-diffusion/configs/consistent-latent-diffusion/consistent_latent_cifar10.yaml", "--dataset_size", "1", "--n_samples", "1"],
             "justMyCode": true
         },
         {
@@ -39,7 +39,7 @@
             "request": "launch",
             "program": "scripts/txt2img.py",
             "console": "integratedTerminal",
-            "args": [ "--prompt","a photograph of an astronaut riding a horse","--plms"],
+            "args": [ "--prompt","", "--seed", "11", "--n_samples", "1", "--n_iter", "1"],
             "justMyCode": true,
             "env": {"PYDEVD_CONTAINER_RANDOM_ACCESS_MAX_ITEMS": "3000"}
         },

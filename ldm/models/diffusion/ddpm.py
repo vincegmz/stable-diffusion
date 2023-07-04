@@ -1677,7 +1677,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         ## test
         # import cv2
         # index = 6
-        # timestep = 999
+        # timestep = 1
         # batch_image = self.decode_first_stage(x_start)[index]
         # batch_image = ((batch_image + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()
         # cv2.imwrite("test_0.png", batch_image[:, :, ::-1])
@@ -1686,8 +1686,10 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # batch_image = self.decode_first_stage(x_t)[index]
         # batch_image = ((batch_image + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()
         # cv2.imwrite("test_t.png", batch_image[:, :, ::-1])
+        # alpha_t = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
         # model_out = self.apply_model(x_t, t,cond, None)
-        # im_out = self.decode_first_stage(model_out)[index]
+        # pred_x0 = (x_t - torch.sqrt(1 - alpha_t) * model_out) / torch.sqrt(alpha_t)
+        # im_out = self.decode_first_stage(pred_x0)[index]
         # im_out = ((im_out + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()        
         # cv2.imwrite("test_out.png", im_out[:, :, ::-1])
         
@@ -1696,10 +1698,10 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         model_out = self.apply_model(x_t, t,cond,'online')
         
         weights_diffusion, weights_consistency = self.get_weightings(self.weight_schedule)
-        loss_diffusion = self.get_loss(model_out, noise, mean=True)
+        # loss_diffusion = self.get_loss(model_out, noise, mean=True)
         
         ## reparameterize stable diffusion model so that when t = 0, it predict the accurate noise
-        model_out[t == 0] = noise[t == 0]
+        # model_out[t == 0] = noise[t == 0]
         
         if self.parameterization == "eps":
             distiller = self.predict_start_from_noise(x_t, t=t, noise= model_out )
@@ -1765,11 +1767,12 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         
         
         loss_dict.update({f'{prefix}/loss_consistency': loss_consistency})
-        loss_dict.update({f'{prefix}/loss_diffusion': loss_diffusion})
-        loss_dict.update({f'{prefix}/loss': loss_consistency * weights_consistency + loss_diffusion * weights_diffusion})
-        return loss_dict['loss'], loss_dict
+        # loss_dict.update({f'{prefix}/loss_diffusion': loss_diffusion})
+        # loss_dict.update({f'{prefix}/loss': loss_consistency * weights_consistency + loss_diffusion * weights_diffusion})
+        return loss_consistency * weights_consistency, loss_dict
 
-    
+    ## TODO
+    # def apply_model(self, x_noisy, t, cond, model_type=None,return_ids=False):    
     def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
