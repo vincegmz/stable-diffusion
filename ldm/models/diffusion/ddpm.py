@@ -1772,8 +1772,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         return loss_consistency * weights_consistency, loss_dict
 
     ## TODO
-    # def apply_model(self, x_noisy, t, cond, model_type=None,return_ids=False):    
-    def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
+    def apply_model(self, x_noisy, t, cond, model_type=None,return_ids=False):    
+    # def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
             pass
@@ -1869,6 +1869,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             print(f"Missing Keys: {missing}")
         if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
+    
+
 
     def configure_optimizers(self):
         lr = self.lr

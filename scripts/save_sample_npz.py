@@ -176,13 +176,13 @@ def main():
     parser.add_argument(
         "--H",
         type=int,
-        default=256,
+        default=512,
         help="image height, in pixel space",
     )
     parser.add_argument(
         "--W",
         type=int,
-        default=256,
+        default=512,
         help="image width, in pixel space",
     )
     parser.add_argument(
@@ -262,7 +262,10 @@ def main():
     # seed_everything(opt.seed)
 
     config = OmegaConf.load(f"{opt.config}")
-    model = load_model_from_config(config, f"{opt.ckpt}")
+    if os.path.exists(opt.ckpt):
+        model = load_model_from_config(config, f"{opt.ckpt}")
+    else:
+        model = instantiate_from_config(config.model)
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
@@ -335,8 +338,9 @@ def main():
                         # why clamp (x_samples_ddim + 1.0) / 2.0? 
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
                         x_samples_ddim = x_samples_ddim.permute(0,2,3,1)
-
+                        
                         # test code
+                        # shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                         #                                  conditioning=c,
                         #                                  batch_size=opt.n_samples,
