@@ -21,6 +21,7 @@ model:
     monitor: val/loss_simple_ema
     weight_schedule: uniform
     weight_decay: 0.0
+    scale_factor: 0.18215
     lr: 0.000008
     ema_rate: 0.999,0.9999,0.9999432189950708
     unet_config:
@@ -51,7 +52,7 @@ model:
     first_stage_config:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
-        ckpt_path: "models/first_stage_models/kl-f8/model.ckpt"
+        # ckpt_path: "models/first_stage_models/kl-f8/model.ckpt"
         embed_dim: 4
         monitor: val/rec_loss
         ddconfig:
@@ -71,6 +72,7 @@ model:
           dropout: 0.0
         lossconfig:
           target: torch.nn.Identity
+
     cond_stage_config: 
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
 
