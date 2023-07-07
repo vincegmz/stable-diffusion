@@ -16,7 +16,7 @@ from torch import autocast
 from contextlib import contextmanager, nullcontext
 
 from ldm.util import instantiate_from_config
-from ldm.models.diffusion.ddim import DDIMSampler
+from ldm.models.diffusion.ddim import DDIMSampler, DDIMConsistencySampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
@@ -147,6 +147,11 @@ def main():
         help = 'use multistep consistent sampling'
     )
     parser.add_argument(
+        "--ddimconsistent",
+        action='store_true',
+        help = 'use ddim consistency sampling'
+    )
+    parser.add_argument(
         "--dpm_solver",
         action='store_true',
         help="use dpm_solver sampling",
@@ -251,6 +256,11 @@ def main():
         default=6,
         help="use safety checker",
     )
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        help="use safety checker",
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -271,6 +281,8 @@ def main():
     model = model.to(device)
     if opt.consistent:
         sampler = ConsistentSolverSampler(model,sampler = 'multistep')
+    elif opt.ddimconsistent:
+        sampler = DDIMConsistencySampler(model)
     elif opt.dpm_solver:
         sampler = DPMSolverSampler(model)
     elif opt.plms:

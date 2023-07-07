@@ -164,22 +164,35 @@ class ConsistentSolverSampler(object):
         t_min_rho = t_min ** (1 / rho)
         s_in = x.new_ones([x.shape[0]])
 
-        for i in range(len(ts) - 1):
-            t = (t_max_rho + ts[i] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
-            t = round(t)- 1
-            out = self.model.apply_model(x, t * s_in,conditions,None)
+        t = (t_max_rho + ts[0] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
+        t = round(t)- 1
+        out = self.model.apply_model(x, t * s_in,conditions,None)
+        if self.model.parameterization == "eps":
+            x0= self.model.predict_start_from_noise(x, t=(t*s_in).to(torch.int64), noise=out)
+        elif self.parameterization == "x0":
+            x0 = out
+        else:
+            raise NotImplementedError()
+        for i in range(1, len(ts)):
+            # next_t = (t_max_rho + ts[i] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
+            # next_t = round(next_t) - 1
+            next_t = round((t_max + ts[i] / (steps - 1) * (t_min - t_max)))
+            next_t = np.clip(next_t, t_min, t_max)
+            next_t = torch.tensor([next_t]).to(x0.device)
+            # x = self.model.q_sample(x0,(next_t*s_in).to(torch.int64))
+            x = (extract_into_tensor(self.sqrt_alphas_cumprod, next_t, x0.shape) * x0 +
+            extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, next_t, x0.shape) * out)
+            # t = (t_max_rho + ts[0] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
+            # t = round(t)- 1
+            out = self.model.apply_model(x, next_t * s_in,conditions,None)
             if self.model.parameterization == "eps":
                 x0= self.model.predict_start_from_noise(x, t=(t*s_in).to(torch.int64), noise=out)
             elif self.parameterization == "x0":
                 x0 = out
             else:
                 raise NotImplementedError()
-            next_t = (t_max_rho + ts[i + 1] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
-            next_t = round(next_t) - 1
-            next_t = np.clip(next_t, t_min, t_max)
-            x = self.model.q_sample(x0,(next_t*s_in).to(torch.int64))
 
-        return x
+        return x0
 
 
     
