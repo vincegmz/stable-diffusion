@@ -1771,7 +1771,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # loss_dict.update({f'{prefix}/loss': loss_consistency * weights_consistency + loss_diffusion * weights_diffusion})
         return loss_consistency * weights_consistency, loss_dict
   
-    def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
+    def apply_model(self, x_noisy, t, cond, model_type=None,return_ids=False):
+    # def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
             pass

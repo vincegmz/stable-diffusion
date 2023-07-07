@@ -44,6 +44,13 @@
                         "1",
                         "--scale",
                         "1.0",
+                        // "--consistent",
+                        "--ddim_steps",
+                        "40"
+                        // "--H",
+                        // "256",
+                        // "--W",
+                        // "256",
                     ],
             "justMyCode": true
         },

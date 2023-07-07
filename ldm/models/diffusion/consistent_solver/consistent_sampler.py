@@ -39,7 +39,8 @@ class ConsistentSolverSampler(object):
         self.steps = steps
         self.model_path = model_path
         self.seed = seed
-        self.ts = tuple(int(x) for x in ts.split(","))
+        # self.ts = tuple(int(x) for x in ts.split(","))
+        
         self.training_mode = training_mode
         self.diffusion_rho = diffusion_rho
         self.sigma_max = sigma_max
@@ -96,6 +97,8 @@ class ConsistentSolverSampler(object):
                     print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}")
 
         # sampling
+        self.ts = torch.cat((torch.arange(start=0, end=self.steps - 1, step=(self.steps - 1)/(S - 1)).to(torch.int64), torch.tensor([self.steps - 1])))
+        self.ts = tuple(self.ts.tolist())
         C, H, W = shape
         size = (batch_size, C, H, W)
         self.make_schedule()
@@ -125,7 +128,7 @@ class ConsistentSolverSampler(object):
 
         if self.sampler == "multistep":
             sampler_self = dict(
-                ts=self.ts, t_min=self.sigma_min, t_max=self.sigma_max, rho=self.diffusion_rho, steps=self.steps
+                ts=self.ts, t_min=1, t_max=1000, rho=self.diffusion_rho, steps=self.steps
             )
         else:
             raise NotImplementedError('only multistep consistent sampling supported')
@@ -152,8 +155,8 @@ class ConsistentSolverSampler(object):
         x,
         conditions,
         ts = None,
-        t_min=0.002,
-        t_max=80.0,
+        t_min=1,
+        t_max=1000,
         rho=7.0,
         steps=40,
     ):
@@ -164,7 +167,7 @@ class ConsistentSolverSampler(object):
         for i in range(len(ts) - 1):
             t = (t_max_rho + ts[i] / (steps - 1) * (t_min_rho - t_max_rho)) ** rho
             t = round(t)- 1
-            out = self.model.apply_model(x, t * s_in,conditions,'online')
+            out = self.model.apply_model(x, t * s_in,conditions,None)
             if self.model.parameterization == "eps":
                 x0= self.model.predict_start_from_noise(x, t=(t*s_in).to(torch.int64), noise=out)
             elif self.parameterization == "x0":
