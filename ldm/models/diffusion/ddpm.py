@@ -1616,19 +1616,20 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             for j,p in enumerate(e):
                 self.register_buffer("ema_{}_{}".format(i,j),p)
     @contextmanager
-    def ema_scope(self, context=None,idx=0):
+    def ema_scope(self, context=None,idx=None):
         self.temp_p = copy.deepcopy(self.online_params)
-        for targ, src in zip(self.online_params, self.ema_params[idx]):
-            targ.copy_(src)
-        if context is not None:
-                print(f"{context}: Switched to EMA weights {idx}")
+        if idx is not None:
+            for targ, src in zip(self.online_params, self.ema_params[idx]):
+                targ.copy_(src)
+            if context is not None:
+                    print(f"{context}: Switched to EMA weights {idx}")
         try:
             yield None
         finally:
             for targ, src in zip(self.online_params, self.temp_p):
                 targ.copy_(src)
             if context is not None:
-                    print(f"{context}: Restored training weights")
+                print(f"{context}: Restored training weights")
     
     
     def forward(self, x, c, *args, **kwargs):

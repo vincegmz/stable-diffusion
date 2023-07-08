@@ -261,6 +261,11 @@ def main():
         type=str,
         help="use safety checker",
     )
+    parser.add_argument(
+        "--ema_idx",
+        type=int,
+        help="index for select ema model, if None us online model ",
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -269,7 +274,7 @@ def main():
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
 
-    # seed_everything(opt.seed)
+    seed_everything(opt.seed)
 
     config = OmegaConf.load(f"{opt.config}")
     if os.path.exists(opt.ckpt):
@@ -321,10 +326,10 @@ def main():
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
-    num_iterations = opt.dataset_size//batch_size+1
+    num_iterations = opt.dataset_size//batch_size
     with torch.no_grad():
         with precision_scope("cuda"):
-            with model.ema_scope(idx = 0):
+            with model.ema_scope(idx = opt.ema_idx):
                 tic = time.time()
                 all_samples = list()
                 for n in trange(num_iterations, desc="Sampling"):
@@ -344,13 +349,17 @@ def main():
                                                          unconditional_guidance_scale=opt.scale,
                                                          unconditional_conditioning=uc,
                                                          eta=opt.ddim_eta,
-                                                         x_T=start_code)
+                                                         x_T=start_code,
+                                                         model_type = opt.model_type)
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
                         # why clamp (x_samples_ddim + 1.0) / 2.0? 
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                        x_samples_ddim = x_samples_ddim.permute(0,2,3,1)
-                        
+                        x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1)
+                        x_samples_ddim = (x_samples_ddim*255).to(torch.uint8).numpy()
+                        for idx_img in range(x_samples_ddim.shape[0]):
+                            cv2.imwrite(os.path.join(outpath, f'grid-{grid_count:04}.png'), x_samples_ddim[idx_img, :, :, ::-1])
+                            grid_count += 1
                         # test code
                         # shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
@@ -371,11 +380,11 @@ def main():
                         # cv2.imwrite("test.png", samples.cpu()[0].numpy())
 
 
-                        with open(os.path.join(outpath, f"samples_{n}.npz"), "wb") as fout:
-                            io_buffer = io.BytesIO()
-                            samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
-                            np.savez_compressed(io_buffer, samples=samples.cpu())
-                            fout.write(io_buffer.getvalue())
+                        # with open(os.path.join(outpath, f"samples_{n}.npz"), "wb") as fout:
+                        #     io_buffer = io.BytesIO()
+                        #     samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
+                        #     np.savez_compressed(io_buffer, samples=samples.cpu())
+                        #     fout.write(io_buffer.getvalue())
 
                         # x_samples_ddim = x_samples_ddim.cpu().numpy()
 
@@ -383,7 +392,7 @@ def main():
 
                         # x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
 
-                        x_checked_image_torch = samples.permute(0, 3, 1, 2)
+                        # x_checked_image_torch = samples.permute(0, 3, 1, 2)
  
                         # if not opt.skip_save:
                         #     for x_sample in x_checked_image_torch:
@@ -393,21 +402,21 @@ def main():
                         #         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
                         #         base_count += 1
 
-                        if not opt.skip_grid:
-                            all_samples.append(x_checked_image_torch)
+                #         if not opt.skip_grid:
+                #             all_samples.append(x_samples_ddim)
 
-                if not opt.skip_grid:
-                    # additionally, save as grid
-                    grid = torch.stack(all_samples, 0)
-                    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                    grid = make_grid(grid, nrow=n_rows)
+                # if not opt.skip_grid:
+                #     # additionally, save as grid
+                #     grid = torch.stack(all_samples, 0)
+                #     grid = rearrange(grid, 'n b h w c-> (n b) h w c')
+                #     grid = make_grid(grid, nrow=n_rows)
 
-                    # to image
-                    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                    img = Image.fromarray(grid.astype(np.uint8))
-                    img = put_watermark(img, wm_encoder)
-                    img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
-                    grid_count += 1
+                #     # to image
+                #     grid = 255. * grid.numpy()
+                #     img = Image.fromarray(grid.astype(np.uint8))
+                #     # img = put_watermark(img, wm_encoder)
+                    
+                #     grid_count += 1
 
                 toc = time.time()
 
