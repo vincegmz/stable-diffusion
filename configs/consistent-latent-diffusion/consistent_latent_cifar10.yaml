@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.0e-06
+  base_learning_rate: 1.0e-05
   target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
     ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
@@ -18,7 +18,7 @@ model:
     channels: 4
     cond_stage_trainable: false
     conditioning_key: crossattn
-    monitor: val/loss_simple_ema
+    monitor: val/loss
     weight_schedule: uniform
     weight_decay: 0.0
     scale_factor: 0.18215
@@ -79,20 +79,20 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 8
+    batch_size: 32
     num_workers: 8
     wrap: false
     train:
       target: ldm.data.cifar10.Cifar10Train
       params:
         config:
-          size: 256
+          size: 128
         data_root: /home/ubuntu/dataset/cifar-10-batches-py
     validation:
       target: ldm.data.cifar10.Cifar10Validation
       params:
         config:
-          size: 256
+          size: 128
         data_root: /home/ubuntu/dataset/cifar-10-batches-py
 
 

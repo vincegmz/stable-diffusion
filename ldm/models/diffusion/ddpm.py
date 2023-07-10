@@ -369,9 +369,11 @@ class DDPM(pl.LightningModule):
         #     loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
         # self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)"""
-        with self.ema_scope():
-            _, loss_dict_ema = self.shared_step(batch)
-            loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
+        loss_dict_ema = {}
+        for ema_idx, ema_rate in enumerate(self.ema_rate):
+            with self.ema_scope(idx = ema_idx):
+                _, loss_dict = self.shared_step(batch)
+                loss_dict_ema.update({key + f'_ema_{ema_rate}': loss_dict[key] for key in loss_dict})
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
         self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
@@ -1698,7 +1700,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_out = self.apply_model(x_t, t,cond,'online')
         
-        weights_diffusion, weights_consistency = self.get_weightings(self.weight_schedule)
+        # weights_diffusion, weights_consistency = self.get_weightings(self.weight_schedule)
         # loss_diffusion = self.get_loss(model_out, noise, mean=True)
         
         ## reparameterize stable diffusion model so that when t = 0, it predict the accurate noise
@@ -1770,7 +1772,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         loss_dict.update({f'{prefix}/loss_consistency': loss_consistency})
         # loss_dict.update({f'{prefix}/loss_diffusion': loss_diffusion})
         # loss_dict.update({f'{prefix}/loss': loss_consistency * weights_consistency + loss_diffusion * weights_diffusion})
-        return loss_consistency * weights_consistency, loss_dict
+        return loss_consistency, loss_dict
   
     def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
         if isinstance(cond, dict):

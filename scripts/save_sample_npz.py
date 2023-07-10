@@ -16,14 +16,12 @@ from torch import autocast
 from contextlib import contextmanager, nullcontext
 
 from ldm.util import instantiate_from_config
-from ldm.models.diffusion.ddim import DDIMSampler, DDIMConsistencySampler
+from ldm.models.diffusion.ddim import DDIMSampler, DDIMConsistencySampler, ConsistentSolverSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from transformers import AutoFeatureExtractor
-
-from ldm.models.diffusion.consistent_solver.consistent_sampler import ConsistentSolverSampler
 
 # load safety model
 safety_model_id = "CompVis/stable-diffusion-safety-checker"
@@ -280,6 +278,7 @@ def main():
     if os.path.exists(opt.ckpt):
         model = load_model_from_config(config, f"{opt.ckpt}")
     else:
+        print(f"Instantiate from config")
         model = instantiate_from_config(config.model)
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
