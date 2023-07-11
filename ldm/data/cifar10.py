@@ -189,7 +189,7 @@ class Cifar10Validation(Cifar10Base):
 
     def __init__(self, process_images=True, data_root='~/dataset/cifar-10-batches-py',**kwargs):
         label_path = os.path.join(data_root,'label.json')
-        super().__init__(data_root,label_path,'train', process_images,**kwargs)
+        super().__init__(data_root,label_path,'val', process_images,**kwargs)
 
 
 
