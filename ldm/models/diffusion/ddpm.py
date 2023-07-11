@@ -25,7 +25,7 @@ from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
-from ldm.models.diffusion.ddim import DDIMSampler
+from ldm.models.diffusion.ddim import DDIMSampler, DDIMConsistencySampler
 from ldm.nn import append_dims
 from piq import LPIPS
 from ldm.modules.attention_new import AdapterForward
@@ -1679,7 +1679,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     def p_losses(self, x_start, cond, t,t2, noise=None):
         ## test
         # import cv2
-        # index = 6
+        # index = 0
         # timestep = 1
         # batch_image = self.decode_first_stage(x_start)[index]
         # batch_image = ((batch_image + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()
@@ -1928,6 +1928,82 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                 }]
             return [opt], scheduler
         return opt
+
+    @torch.no_grad()
+    def sample_log(self,cond,batch_size, ddim, model_type, ddim_steps,**kwargs):
+
+        ddim_sampler = DDIMConsistencySampler(self)
+        shape = (self.channels, self.image_size, self.image_size)
+        samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
+                                                    shape,cond,verbose=False,
+                                                    model_type = model_type,
+                                                    **kwargs)
+
+        return samples, intermediates
+
+    @torch.no_grad()
+    def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
+                   quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
+                   plot_diffusion_rows=False, **kwargs):
+
+        use_ddim = ddim_steps is not None
+
+        log = dict()
+        z, c, x, xrec, xc = self.get_input(batch, self.first_stage_key,
+                                           return_first_stage_outputs=True,
+                                           force_c_encode=True,
+                                           return_original_cond=True,
+                                           bs=N)
+        N = min(x.shape[0], N)
+        n_row = min(x.shape[0], n_row)
+
+        if sample:
+            # get denoise row
+            for idx, ema in enumerate(self.ema_rate):
+                with self.ema_scope("Plotting", idx=idx):
+                    samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+                                                            unconditional_guidance_scale=1.0,
+                                                            ddim_steps=ddim_steps,eta=0.0,
+                                                            model_type = "online")
+                x_samples = self.decode_first_stage(samples)
+                log[f"samples_ema_{ema}"] = x_samples
+            with self.ema_scope("Plotting", idx=None):
+                samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+                                                        unconditional_guidance_scale=1.0,
+                                                        ddim_steps=ddim_steps,eta=0.0,
+                                                        model_type = "online")
+            x_samples = self.decode_first_stage(samples)
+            log[f"samples_no_ema"] = x_samples
+
+        if plot_progressive_rows:
+            with self.ema_scope("Plotting Progressives"):
+                img, progressives = self.progressive_denoising(c,
+                                                               shape=(self.channels, self.image_size, self.image_size),
+                                                               batch_size=N)
+            prog_row = self._get_denoise_row_from_list(progressives, desc="Progressive Generation")
+            log["progressive_row"] = prog_row
+
+        if return_keys:
+            if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
+                return log
+            else:
+                return {key: log[key] for key in return_keys}
+        return log
+
+    # @torch.no_grad()
+    # def sample_log(self,cond,batch_size,ddim, ddim_steps,**kwargs):
+
+    #     if ddim:
+    #         ddim_sampler = ConsistentSolverSampler(self,sampler = 'multistep')
+    #         shape = (self.channels, self.image_size, self.image_size)
+    #         samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
+    #                                                     shape,cond,verbose=False,**kwargs)
+
+    #     else:
+    #         samples, intermediates = self.sample(cond=cond, batch_size=batch_size,
+    #                                              return_intermediates=True,**kwargs)
+
+    #     return samples, intermediates
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):
