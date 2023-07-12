@@ -406,10 +406,10 @@ class DDIMConsistencySampler(DDIMSampler):
 
 
     def make_schedule(self, ddim_num_steps, ddim_discretize="uniform", ddim_eta=0., verbose=True):
-        t_max_rho = (self.ddpm_num_timesteps - 1) ** (1 / self.rho)
+        t_max_rho = (self.ddpm_num_timesteps) ** (1 / self.rho)
         t_min_rho = 1 ** (1 / self.rho)
         t = (t_max_rho + self.ts / (self.consistency_training_steps - 1) * (t_min_rho - t_max_rho)) ** self.rho
-        self.time_range = np.array(torch.round(t)).astype(np.int64)
+        self.time_range = np.array(torch.round(t)).astype(np.int64) - 1
         self.ddim_timesteps = self.time_range[::-1].copy()
         alphas_cumprod = self.model.alphas_cumprod
         assert alphas_cumprod.shape[0] == self.ddpm_num_timesteps, 'alphas have to be defined for each timestep'

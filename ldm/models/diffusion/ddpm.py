@@ -25,7 +25,7 @@ from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
-from ldm.models.diffusion.ddim import DDIMSampler, DDIMConsistencySampler
+from ldm.models.diffusion.ddim import DDIMSampler, DDIMConsistencySampler, ConsistentSolverSampler
 from ldm.nn import append_dims
 from piq import LPIPS
 from ldm.modules.attention_new import AdapterForward
@@ -1642,20 +1642,18 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # batch_image = ((batch_image + 1)*255/2).cpu().to(torch.uint8).permute(1, 2, 0).numpy()
         # cv2.imwrite("test.png", batch_image[:, :, ::-1])
        
-        num_scales = self.num_scales
-        indices = torch.randint(
-            0, num_scales-1, (x.shape[0],), device=self.device
-        ).long()
-    
-        t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
-            1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-        t = torch.round(t**self.rho).to(torch.int64) - 1
+        # for indices in torch.arange(0, num_scales):
+        #     indices = indices.repeat(x.shape[0],).cuda()
+        #     t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
+        #         1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+        #     t = torch.round(t**self.rho).to(torch.int64) - 1
 
-        t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
-            1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-        t2 = torch.round(t2**self.rho).to(torch.int64) - 1
-
-        # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        #     t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+        #         1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+        #     t2 = torch.round(t2**self.rho).to(torch.int64) - 1
+        #     loss,loss_dict = self.p_losses(x,c,t,t2, *args, **kwargs)
+        #     print(loss)
+        loss_dict = {}
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
@@ -1663,11 +1661,70 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
-        loss,loss_dict = self.p_losses(x,c,t,t2, *args, **kwargs)
+        num_scales = self.num_scales            
+        if self.training:
+            indices = torch.randint(
+                0, num_scales, (x.shape[0],), device=self.device
+            ).long()
+            # indices = torch.randint(
+            #     0, 10, (x.shape[0],), device=self.device
+            # ).long()
+            t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
+                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+            t = torch.round(t**self.rho).to(torch.int64) - 1
+
+            t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+            t2 = torch.round(t2**self.rho).to(torch.int64) - 1
+            consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
+            diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)
+            consistency_loss_weight, diffusion_loss_weight = self.loss_weight_scheduler()
+            loss = diffusion_loss * diffusion_loss_weight + consistency_loss * consistency_loss_weight
+        else:
+            # loss_mean = 0
+            # for indices in torch.arange(0, 1):
+            #     indices = indices.repeat(x.shape[0],).cuda()
+            #     t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
+            #         1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+            #     t = torch.round(t**self.rho).to(torch.int64) - 1
+
+            #     t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+            #         1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+            #     t2 = torch.round(t2**self.rho).to(torch.int64) - 1
+            #     consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
+            #     diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)  
+            #     loss_mean += consistency_loss
+            # loss = loss_mean
+            indices = torch.randint(
+                0, num_scales, (x.shape[0],), device=self.device
+            ).long()
+            # indices = torch.randint(
+            #     0, 10, (x.shape[0],), device=self.device
+            # ).long()
+            t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
+                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+            t = torch.round(t**self.rho).to(torch.int64) - 1
+
+            t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+            t2 = torch.round(t2**self.rho).to(torch.int64) - 1
+            consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
+            diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)
+            consistency_loss_weight, diffusion_loss_weight = self.loss_weight_scheduler()
+            loss = diffusion_loss * diffusion_loss_weight + consistency_loss * consistency_loss_weight
+
+        # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
         # loss *= resample_weights
         prefix = 'train' if self.training else 'val'
+        loss_dict.update(consistency_loss_dict)
+        loss_dict.update(diffusion_loss_dict)
         loss_dict.update({f'{prefix}/loss': loss.mean()})
         return loss, loss_dict
+    
+    def loss_weight_scheduler(self):
+        consistency_loss_weight = 0 
+        diffusion_loss_weight = 1
+        return consistency_loss_weight, diffusion_loss_weight
     
     def DDIM_solver(self, x_t, t, t2, cond):
         alpha_t = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
@@ -1676,7 +1733,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         pred_x_prev = torch.sqrt(alpha_t_prev) * ((x_t * 1/torch.sqrt(alpha_t)) + (torch.sqrt((1 - alpha_t_prev)/alpha_t_prev) - torch.sqrt((1 - alpha_t)/alpha_t)) * pred_eps)
         return pred_x_prev
 
-    def p_losses(self, x_start, cond, t,t2, noise=None):
+    def Consistencylosses(self, x_start, cond, t, t2, noise=None):
         ## test
         # import cv2
         # index = 0
@@ -1769,11 +1826,46 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             raise ValueError(f"Unknown loss norm {self.loss_norm}")
         
         
-        loss_dict.update({f'{prefix}/loss_consistency': loss_consistency})
+        loss_dict.update({f'{prefix}/consistency_loss': loss_consistency})
         # loss_dict.update({f'{prefix}/loss_diffusion': loss_diffusion})
         # loss_dict.update({f'{prefix}/loss': loss_consistency * weights_consistency + loss_diffusion * weights_diffusion})
         return loss_consistency, loss_dict
-  
+
+    def DiffusionLosses(self, x_start, cond, t, noise=None):
+        noise = default(noise, lambda: torch.randn_like(x_start))
+        x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
+        model_output = self.apply_model(x_t, t,cond,'online')
+        loss_dict = {}
+        prefix = 'train' if self.training else 'val'
+
+        if self.parameterization == "x0":
+            target = x_start
+        elif self.parameterization == "eps":
+            target = noise
+        else:
+            raise NotImplementedError()
+
+        loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+        # loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+
+        logvar_t = self.logvar[t].to(self.device)
+        loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+        if self.learn_logvar:
+            loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
+            loss_dict.update({'logvar': self.logvar.data.mean()})
+
+        loss = self.l_simple_weight * loss.mean()
+
+        loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+        loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+        # loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+        loss += (self.original_elbo_weight * loss_vlb)
+        loss_dict.update({f'{prefix}/diffusion_loss': loss})
+
+        return loss, loss_dict
+    
+        
     def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
@@ -1874,7 +1966,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
 
 
     def configure_optimizers(self):
-        lr = self.lr
+        lr = self.learning_rate
         params = []
         # changed from self.model.parameters() to self.online_model.parameters()
         if self.train_level is not None and "adapter" in self.train_level and "unet" not in self.train_level:
@@ -1930,19 +2022,26 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         return opt
 
     @torch.no_grad()
-    def sample_log(self,cond,batch_size, ddim, model_type, ddim_steps,**kwargs):
+    def sample_log(self,cond,batch_size, ddim, model_type, ddim_steps, sampler_type, **kwargs):
 
-        ddim_sampler = DDIMConsistencySampler(self)
-        shape = (self.channels, self.image_size, self.image_size)
-        samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
-                                                    shape,cond,verbose=False,
-                                                    model_type = model_type,
-                                                    **kwargs)
-
+        if sampler_type == "DDIMconsistency":
+            ddim_sampler = DDIMConsistencySampler(self)
+            shape = (self.channels, self.image_size, self.image_size)
+            samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
+                                                        shape,cond,verbose=False,
+                                                        model_type = model_type,
+                                                        **kwargs)
+        elif sampler_type == "consistency":
+            ddim_sampler = ConsistentSolverSampler(self,sampler = 'multistep')
+            shape = (self.channels, self.image_size, self.image_size)
+            samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
+                                                        shape,cond,verbose=False,
+                                                        model_type = model_type,
+                                                        **kwargs)
         return samples, intermediates
 
     @torch.no_grad()
-    def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
+    def log_images(self, batch, N=1, n_row=1, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
                    quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
                    plot_diffusion_rows=False, **kwargs):
 
@@ -1958,22 +2057,25 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         n_row = min(x.shape[0], n_row)
 
         if sample:
-            # get denoise row
-            for idx, ema in enumerate(self.ema_rate):
-                with self.ema_scope("Plotting", idx=idx):
+            for sampler_type, sample_step in zip(["DDIMconsistency", "consistency"], [ddim_steps, 2]):
+                # get denoise row
+                for idx, ema in enumerate(self.ema_rate):
+                    with self.ema_scope("Plotting", idx=idx):
+                        samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+                                                                unconditional_guidance_scale=1.0,
+                                                                ddim_steps=sample_step,eta=0.0,
+                                                                sampler_type=sampler_type,
+                                                                model_type = "online")
+                    x_samples = self.decode_first_stage(samples)
+                    log[f"samples_{sampler_type}_ema_{ema}"] = x_samples
+                with self.ema_scope("Plotting", idx=None):
                     samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
                                                             unconditional_guidance_scale=1.0,
-                                                            ddim_steps=ddim_steps,eta=0.0,
+                                                            ddim_steps=sample_step,eta=0.0,
+                                                            sampler_type=sampler_type,
                                                             model_type = "online")
                 x_samples = self.decode_first_stage(samples)
-                log[f"samples_ema_{ema}"] = x_samples
-            with self.ema_scope("Plotting", idx=None):
-                samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                        unconditional_guidance_scale=1.0,
-                                                        ddim_steps=ddim_steps,eta=0.0,
-                                                        model_type = "online")
-            x_samples = self.decode_first_stage(samples)
-            log[f"samples_no_ema"] = x_samples
+                log[f"samples_{sampler_type}_no_ema"] = x_samples
 
         if plot_progressive_rows:
             with self.ema_scope("Plotting Progressives"):

@@ -592,7 +592,8 @@ if __name__ == "__main__":
                 "filename": "{epoch:06}",
                 "verbose": True,
                 "save_last": True,
-                "every_n_epochs": 1,
+                ## TODO
+                "every_n_epochs": 100,
             }
         }
         if hasattr(model, "monitor"):
@@ -740,7 +741,7 @@ if __name__ == "__main__":
                 trainer.fit(model, data)
             except Exception:
                 # melk()
-                raise
+                pass
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)
     except Exception:

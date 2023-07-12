@@ -23,7 +23,6 @@
             "-t","--gpus","0,"],
             "justMyCode": true
         },
-
         {
             "name": "save_sample_npz",
             "type": "python",
@@ -71,7 +70,7 @@
                         // "--seed",
                         // "11",
                         "--ckpt",
-                        "~/checkpoints/epoch=000000.ckpt",
+                        "~/checkpoints/epoch=000005.ckpt",
                         "--config",
                         "/home/ubuntu/stable-diffusion/configs/consistent-latent-diffusion/consistent_latent_cifar10oneimage.yaml",
                         "--dataset_size",
@@ -85,8 +84,8 @@
                         "--ddim_steps",
                         "40",
                         "--fixed_code",
-                        "--model_type",
-                        "online",
+                        // "--model_type",
+                        // "online",
                         // "--ema_idx",
                         // "1"
                         // "--H",
