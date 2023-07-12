@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.0e-05
+  base_learning_rate: 1.0e-04
   target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
     ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
@@ -78,31 +78,33 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 2
+    batch_size: 16
     num_workers: 8
     wrap: false
     train:
       target: ldm.data.cifar10.Cifar10Train
       params:
         config:
-          size: 512
+          size: 128
         data_root: /home/ubuntu/dataset/cifar-10-batches-py
     validation:
       target: ldm.data.cifar10.Cifar10Validation
       params:
         config:
-          size: 512
+          size: 128
         data_root: /home/ubuntu/dataset/cifar-10-batches-py
 
 
 lightning:
-  # callbacks:
-  #   image_logger:
-  #     target: main.ImageLogger
-  #     params:
-  #       batch_frequency: 10
-  #       max_images: 8
-  #       increase_log_steps: False
+  callbacks:
+    image_logger:
+      target: main_consistent.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 1
+        increase_log_steps: False
+        log_images_kwargs:
+          ddim_steps: 40
 
   trainer:
     benchmark: True

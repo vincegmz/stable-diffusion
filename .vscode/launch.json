@@ -23,7 +23,6 @@
             "-t","--gpus","0,"],
             "justMyCode": true
         },
-
         {
             "name": "save_sample_npz",
             "type": "python",
@@ -53,6 +52,42 @@
                         "online",
                         "--ema_idx",
                         "1"
+                        // "--H",
+                        // "256",
+                        // "--W",
+                        // "256",
+                    ],
+            "justMyCode": true
+        },
+        {
+            "name": "eval_fintuning_oneimage",
+            "type": "python",
+            "request": "launch",
+            "program": "scripts/save_sample_npz.py",
+            "console": "integratedTerminal",
+            "args": [ "--prompt",
+                        "",
+                        // "--seed",
+                        // "11",
+                        "--ckpt",
+                        "~/checkpoints/epoch=000005.ckpt",
+                        "--config",
+                        "/home/ubuntu/stable-diffusion/configs/consistent-latent-diffusion/consistent_latent_cifar10oneimage.yaml",
+                        "--dataset_size",
+                        "1",
+                        "--n_samples",
+                        "1",
+                        "--scale",
+                        "1.0",
+                        // "--consistent",
+                        "--ddimconsistent",
+                        "--ddim_steps",
+                        "40",
+                        "--fixed_code",
+                        // "--model_type",
+                        // "online",
+                        // "--ema_idx",
+                        // "1"
                         // "--H",
                         // "256",
                         // "--W",
@@ -103,8 +138,9 @@
             "program": "main_consistent.py",
             "console": "integratedTerminal",
             "args": ["--base","configs/consistent-latent-diffusion/consistent_latent_cifar10oneimage.yaml", //"--base","configs/autoencoder/autoencoder_kl_64x64x3.yaml"
-            "-t","--gpus","0,", "-l", "/home/ubuntu/exp/stablediffusion/test/"],
+            "-t","--gpus","0,", "-l", "/home/ubuntu/exp/stablediffusion/", "-n", "test_oneimage"],
             "justMyCode": true
+            // python main_consistent.py --base configs/consistent-latent-diffusion/consistent_latent_cifar10oneimage.yaml -t --gpus 0, -l /home/ubuntu/exp/stablediffusion/ -n test_oneimage
         },
         {
             "name": "sample_diffusion",

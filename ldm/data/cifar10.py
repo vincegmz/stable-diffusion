@@ -196,7 +196,7 @@ class Cifar10TrainOneImage(Cifar10Base):
         label_path = os.path.join(data_root,'label.json')
         super().__init__(data_root,label_path,'train', process_images,**kwargs)
     def __len__(self):
-        return len(self.data)
+        return 1000
 
     def __getitem__(self, i):
         return self.data[0]
@@ -205,9 +205,9 @@ class Cifar10ValidationOneImage(Cifar10Base):
 
     def __init__(self, process_images=True, data_root='~/dataset/cifar-10-batches-py',**kwargs):
         label_path = os.path.join(data_root,'label.json')
-        super().__init__(data_root,label_path,'val', process_images,**kwargs)
+        super().__init__(data_root,label_path,'train', process_images,**kwargs)
     def __len__(self):
-        return len(self.data)
+        return 100
 
     def __getitem__(self, i):
         return self.data[0]
