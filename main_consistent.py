@@ -737,11 +737,11 @@ if __name__ == "__main__":
 
         # run
         if opt.train:
-            try:
-                trainer.fit(model, data)
-            except Exception:
-                # melk()
-                pass
+            # try:
+            trainer.fit(model, data)
+            # except Exception:
+            #     # melk()
+            #     pass
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)
     except Exception:

@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.0e-04
+  base_learning_rate: 1.0e-05
   target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
     ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
@@ -45,7 +45,7 @@ model:
             - type: inout # inout
               din: attn2o  # 
               dout: ffni # 
-              mid_dim: 60
+              mid_dim: 256
               method: "default"
               scale: 1.0 # 
     
@@ -78,66 +78,33 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
+    batch_size: 16
     num_workers: 8
     wrap: false
     train:
-      target: ldm.data.cifar10.Cifar10ValidationOneImage
+      target: ldm.data.cifar10.Cifar10Train
       params:
         config:
           size: 512
-        data_root: /home/ubuntu/dataset/cifar-10-batches-py
+        data_root: /scratch/qingqu_root/qingqu1/shared_data/stablediffusion/data/cifar10/
     validation:
-      target: ldm.data.cifar10.Cifar10ValidationOneImage
+      target: ldm.data.cifar10.Cifar10Validation
       params:
         config:
           size: 512
-        data_root: /home/ubuntu/dataset/cifar-10-batches-py
-
-# data:
-#   target: main_dream_booth.DataModuleFromConfig
-#   params:
-#     batch_size: 1
-#     num_workers: 2
-#     wrap: false
-#     train:
-#       target: ldm.data.personalized_dream.PersonalizedBase
-#       params:
-#         data_root: /home/ubuntu/stable-diffusion/dream_data/xiaoyang/example
-#         size: 512
-#         set: train
-#         per_image_tokens: false
-#         repeats: 100
-#     reg:
-#       target: ldm.data.personalized_dream.PersonalizedBase
-#       params:
-#         data_root: /home/ubuntu/stable-diffusion/dream_data/xiaoyang/reg_dog/samples
-#         size: 512
-#         set: train
-#         reg: true
-#         per_image_tokens: false
-#         repeats: 5
-        
-#     validation:
-#       target: ldm.data.personalized_dream.PersonalizedBase
-#       params:
-#         data_root: /home/ubuntu/stable-diffusion/dream_data/xiaoyang/example
-#         size: 512
-#         set: val
-#         per_image_tokens: false
-#         repeats: 10
+        data_root: /scratch/qingqu_root/qingqu1/shared_data/stablediffusion/data/cifar10/
 
 
-# lightning:
-#   callbacks:
-#     image_logger:
-#       target: main_consistent.ImageLogger
-#       params:
-#         batch_frequency: 200
-#         max_images: 1
-#         increase_log_steps: False
-#         log_images_kwargs:
-#           ddim_steps: 40
+lightning:
+  callbacks:
+    image_logger:
+      target: main_consistent.ImageLogger
+      params:
+        batch_frequency: 200
+        max_images: 1
+        increase_log_steps: False
+        log_images_kwargs:
+          ddim_steps: 40
 
   trainer:
     benchmark: True

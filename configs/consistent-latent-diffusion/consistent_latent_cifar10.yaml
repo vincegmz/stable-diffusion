@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.0e-04
+  base_learning_rate: 1.0e-05
   target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
     ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
@@ -45,7 +45,7 @@ model:
             - type: inout # inout
               din: attn2o  # 
               dout: ffni # 
-              mid_dim: 60
+              mid_dim: 256
               method: "default"
               scale: 1.0 # 
     
@@ -78,21 +78,21 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 16
+    batch_size: 4
     num_workers: 8
     wrap: false
     train:
       target: ldm.data.cifar10.Cifar10Train
       params:
         config:
-          size: 128
-        data_root: /home/ubuntu/dataset/cifar-10-batches-py
+          size: 512
+        data_root: /scratch/qingqu_root/qingqu1/shared_data/stablediffusion/data/cifar10/
     validation:
       target: ldm.data.cifar10.Cifar10Validation
       params:
         config:
-          size: 128
-        data_root: /home/ubuntu/dataset/cifar-10-batches-py
+          size: 512
+        data_root: /scratch/qingqu_root/qingqu1/shared_data/stablediffusion/data/cifar10/
 
 
 lightning:

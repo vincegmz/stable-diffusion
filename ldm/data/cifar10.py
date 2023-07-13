@@ -196,7 +196,7 @@ class Cifar10TrainOneImage(Cifar10Base):
         label_path = os.path.join(data_root,'label.json')
         super().__init__(data_root,label_path,'train', process_images,**kwargs)
     def __len__(self):
-        return 1000
+        return 10000
 
     def __getitem__(self, i):
         return self.data[0]

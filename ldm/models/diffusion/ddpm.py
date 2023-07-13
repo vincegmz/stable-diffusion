@@ -1661,57 +1661,22 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             if self.shorten_cond_schedule:  # TODO: drop this option
                 tc = self.cond_ids[t].to(self.device)
                 c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
-        num_scales = self.num_scales            
-        if self.training:
-            indices = torch.randint(
-                0, num_scales, (x.shape[0],), device=self.device
-            ).long()
-            # indices = torch.randint(
-            #     0, 10, (x.shape[0],), device=self.device
-            # ).long()
-            t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
-                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-            t = torch.round(t**self.rho).to(torch.int64) - 1
+        num_scales = self.num_scales          
+          
+        indices = torch.randint(
+            0, num_scales, (x.shape[0],), device=self.device
+        ).long()
+        t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
+            1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+        t = torch.round(t**self.rho).to(torch.int64) - 1
 
-            t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
-                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-            t2 = torch.round(t2**self.rho).to(torch.int64) - 1
-            consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
-            diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)
-            consistency_loss_weight, diffusion_loss_weight = self.loss_weight_scheduler()
-            loss = diffusion_loss * diffusion_loss_weight + consistency_loss * consistency_loss_weight
-        else:
-            # loss_mean = 0
-            # for indices in torch.arange(0, 1):
-            #     indices = indices.repeat(x.shape[0],).cuda()
-            #     t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
-            #         1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-            #     t = torch.round(t**self.rho).to(torch.int64) - 1
-
-            #     t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
-            #         1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-            #     t2 = torch.round(t2**self.rho).to(torch.int64) - 1
-            #     consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
-            #     diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)  
-            #     loss_mean += consistency_loss
-            # loss = loss_mean
-            indices = torch.randint(
-                0, num_scales, (x.shape[0],), device=self.device
-            ).long()
-            # indices = torch.randint(
-            #     0, 10, (x.shape[0],), device=self.device
-            # ).long()
-            t = self.num_timesteps ** (1 / self.rho) + indices /(num_scales-1)  * (
-                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-            t = torch.round(t**self.rho).to(torch.int64) - 1
-
-            t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
-                1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
-            t2 = torch.round(t2**self.rho).to(torch.int64) - 1
-            consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
-            diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)
-            consistency_loss_weight, diffusion_loss_weight = self.loss_weight_scheduler()
-            loss = diffusion_loss * diffusion_loss_weight + consistency_loss * consistency_loss_weight
+        t2 = self.num_timesteps ** (1 / self.rho) + (indices + 1) / (num_scales-1) * (
+            1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
+        t2 = torch.round(t2**self.rho).to(torch.int64) - 1
+        consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
+        diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)
+        consistency_loss_weight, diffusion_loss_weight = self.loss_weight_scheduler()
+        loss = diffusion_loss * diffusion_loss_weight + consistency_loss * consistency_loss_weight
 
         # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
         # loss *= resample_weights
@@ -1848,8 +1813,9 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         # loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
-        logvar_t = self.logvar[t].to(self.device)
-        loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        # logvar_t = self.logvar[t].to(self.device)
+        # loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        loss = loss_simple
         # loss = loss_simple / torch.exp(self.logvar) + self.logvar
         if self.learn_logvar:
             loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
