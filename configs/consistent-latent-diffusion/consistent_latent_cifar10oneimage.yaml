@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.0e-03
+  base_learning_rate: 1.0e-04
   target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
     ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
@@ -78,33 +78,66 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 16
+    batch_size: 1
     num_workers: 8
     wrap: false
     train:
-      target: ldm.data.cifar10.Cifar10TrainOneImage
+      target: ldm.data.cifar10.Cifar10ValidationOneImage
       params:
         config:
-          size: 128
+          size: 512
         data_root: /home/ubuntu/dataset/cifar-10-batches-py
     validation:
       target: ldm.data.cifar10.Cifar10ValidationOneImage
       params:
         config:
-          size: 128
+          size: 512
         data_root: /home/ubuntu/dataset/cifar-10-batches-py
 
+# data:
+#   target: main_dream_booth.DataModuleFromConfig
+#   params:
+#     batch_size: 1
+#     num_workers: 2
+#     wrap: false
+#     train:
+#       target: ldm.data.personalized_dream.PersonalizedBase
+#       params:
+#         data_root: /home/ubuntu/stable-diffusion/dream_data/xiaoyang/example
+#         size: 512
+#         set: train
+#         per_image_tokens: false
+#         repeats: 100
+#     reg:
+#       target: ldm.data.personalized_dream.PersonalizedBase
+#       params:
+#         data_root: /home/ubuntu/stable-diffusion/dream_data/xiaoyang/reg_dog/samples
+#         size: 512
+#         set: train
+#         reg: true
+#         per_image_tokens: false
+#         repeats: 5
+        
+#     validation:
+#       target: ldm.data.personalized_dream.PersonalizedBase
+#       params:
+#         data_root: /home/ubuntu/stable-diffusion/dream_data/xiaoyang/example
+#         size: 512
+#         set: val
+#         per_image_tokens: false
+#         repeats: 10
 
-lightning:
-  callbacks:
-    image_logger:
-      target: main_consistent.ImageLogger
-      params:
-        batch_frequency: 200
-        max_images: 1
-        increase_log_steps: False
-        log_images_kwargs:
-          ddim_steps: 40
+
+# lightning:
+#   callbacks:
+#     image_logger:
+#       target: main_consistent.ImageLogger
+#       params:
+#         batch_frequency: 200
+#         max_images: 1
+#         increase_log_steps: False
+#         log_images_kwargs:
+#           ddim_steps: 40
 
   trainer:
     benchmark: True
