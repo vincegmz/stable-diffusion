@@ -593,7 +593,7 @@ if __name__ == "__main__":
                 "verbose": True,
                 "save_last": True,
                 ## TODO
-                "every_n_epochs": 100,
+                "every_n_epochs": 1,
             }
         }
         if hasattr(model, "monitor"):

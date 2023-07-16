@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.0e-04
+  base_learning_rate: 1.0e-05
   target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
   params:
     ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
@@ -14,7 +14,7 @@ model:
     timesteps: 1000
     first_stage_key: image
     cond_stage_key: caption
-    image_size: 64
+    image_size: 16
     channels: 4
     cond_stage_trainable: false
     conditioning_key: crossattn
@@ -45,7 +45,7 @@ model:
             - type: inout # inout
               din: attn2o  # 
               dout: ffni # 
-              mid_dim: 60
+              mid_dim: 256
               method: "default"
               scale: 1.0 # 
     
@@ -78,21 +78,21 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
+    batch_size: 16
     num_workers: 8
     wrap: false
     train:
       target: ldm.data.cifar10.Cifar10TrainCaption
       params:
         config:
-          size: 512
-        data_root: /scratch/qingqu_root/qingqu1/shared_data/stablediffusion/data/cifar10/
+          size: 128
+        data_root: /home/ubuntu/dataset/cifar-10-batches-py
     validation:
       target: ldm.data.cifar10.Cifar10ValidationCaption
       params:
         config:
-          size: 512
-        data_root: /scratch/qingqu_root/qingqu1/shared_data/stablediffusion/data/cifar10/
+          size: 128
+        data_root: /home/ubuntu/dataset/cifar-10-batches-py
 
 
 lightning:
@@ -100,7 +100,7 @@ lightning:
     image_logger:
       target: main_consistent.ImageLogger
       params:
-        batch_frequency: 200
+        batch_frequency: 500
         max_images: 1
         increase_log_steps: False
         log_images_kwargs:
