@@ -26,7 +26,7 @@ from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from ldm.util import instantiate_from_config
 from  tools.utils import DreamWorker
 
-def stable_diffusion(model, prompt, seed=42, ddim_steps=25, n_samples=4, n_iter=8, scale=7.0, C=4, H=512, W=512, f=8,
+def stable_diffusion(model, prompt, seed=42, ddim_steps=25, n_samples=4, n_iter=8, scale=5.0, C=4, H=512, W=512, f=8,
                      ddim_eta=0.0):
     sampler = DPMSolverSampler(model)
     seed_everything(seed)
@@ -471,7 +471,8 @@ class ImageLogger(Callback):
                 print(f"class word is {class_word}")
             else:
                 raise ValueError("class word is None!")
-                
+            
+            #TODO
             images = stable_diffusion(pl_module, f"a photo of a sks {class_word}", n_iter=32, n_samples=1)
             path = os.path.join(pl_module.logger.save_dir,"images", str(pl_module.global_step))
             os.makedirs(path, exist_ok=True)

@@ -198,9 +198,9 @@ class PersonalizedBase(Dataset):
             text = random.choice(training_templates_smallest).format(placeholder_string)
         else:
             text = random.choice(reg_templates_smallest).format(placeholder_string)
-            
+        
         example["caption"] = text
-
+        
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)
         

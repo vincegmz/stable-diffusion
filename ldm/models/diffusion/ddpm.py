@@ -1674,6 +1674,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             1 ** (1 / self.rho) - self.num_timesteps** (1 / self.rho))
         t2 = torch.round(t2**self.rho).to(torch.int64) - 1
         consistency_loss, consistency_loss_dict = self.Consistencylosses(x, c, t, t2, *args, **kwargs)
+        
+        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)
         consistency_loss_weight, diffusion_loss_weight = self.loss_weight_scheduler()
         loss = diffusion_loss * diffusion_loss_weight + consistency_loss * consistency_loss_weight
@@ -2021,14 +2023,16 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                                            bs=N)
         N = min(x.shape[0], N)
         n_row = min(x.shape[0], n_row)
-
+        uc = self.get_learned_conditioning(len(c) * [""])
+        
         if sample:
             for sampler_type, sample_step in zip(["DDIMconsistency", "consistency"], [ddim_steps, 2]):
                 # get denoise row
                 for idx, ema in enumerate(self.ema_rate):
                     with self.ema_scope("Plotting", idx=idx):
                         samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                                unconditional_guidance_scale=1.0,
+                                                                unconditional_guidance_scale=5.0,
+                                                                unconditional_conditioning=uc,
                                                                 ddim_steps=sample_step,eta=0.0,
                                                                 sampler_type=sampler_type,
                                                                 model_type = "online")
@@ -2036,7 +2040,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
                     log[f"samples_{sampler_type}_ema_{ema}"] = x_samples
                 with self.ema_scope("Plotting", idx=None):
                     samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                            unconditional_guidance_scale=1.0,
+                                                            unconditional_guidance_scale=5.0,
+                                                            unconditional_conditioning=uc,
                                                             ddim_steps=sample_step,eta=0.0,
                                                             sampler_type=sampler_type,
                                                             model_type = "online")

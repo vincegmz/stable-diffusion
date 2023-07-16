@@ -4,7 +4,7 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-
+import random
 import os, yaml, pickle, shutil, tarfile, glob
 import cv2
 import albumentations
@@ -176,6 +176,71 @@ class Cifar10Base(Dataset):
                                    )
         else:
             self.data = self.abspaths
+            
+            
+class Cifar10Caption(Cifar10Base):
+    def __init__(self, data_root,label_path,mode, process_images, config=None, selection_cate = None):
+        self.selection_cate = selection_cate
+        super().__init__(data_root,label_path,mode, process_images, config)
+        
+        
+    def _load(self,mode):
+        if mode =='train':
+            with open(self.train_list, "r") as f:
+                self.relpaths = f.read().splitlines()
+        elif mode == 'val':
+            with open(self.val_list, "r") as f:
+                self.relpaths = f.read().splitlines()
+        else:
+            raise NotImplementedError()
+        
+        self.synsets = [None for _ in self.relpaths]
+        self.abspaths = [os.path.join(os.path.dirname(self.data_root), p) for p in self.relpaths]
+        self.class_labels = [int(self.labels[relpath]) for relpath in self.relpaths]
+        human_dict = {
+            0: 'airplane',
+            1: 'automobile',
+            2: 'bird',
+            3: 'cat',
+            4: 'deer',
+            5: 'dog',
+            6: 'frog',
+            7: 'horse',
+            8: 'ship',
+            9: 'truck'
+            }
+        self.human_labels = [human_dict[s] for s in self.class_labels]
+        
+        self.relpaths_select = []
+        self.class_labels_select = []
+        self.human_labels_select = []
+        self.abspaths_select = []
+        for idx, class_label in enumerate(self.class_labels):
+            if human_dict[class_label] == self.selection_cate or self.selection_cate is None:
+                self.relpaths_select.append(self.relpaths[idx])
+                self.class_labels_select.append(self.class_labels[idx])
+                self.human_labels_select.append(self.human_labels[idx])
+                self.abspaths_select.append(self.abspaths[idx])
+                
+        labels = {
+            "relpath": np.array(self.relpaths_select),
+            # "synsets": np.array(self.synsets),
+            "class_label": np.array(self.class_labels_select),
+            "human_label": np.array(self.human_labels_select),
+            "caption":np.array([f'photo of a {label}' for label in self.human_labels_select])
+        }
+        
+        
+
+        if self.process_images:
+            self.size = retrieve(self.config, "size", default=256)
+            self.data = ImagePaths(self.abspaths_select,
+                                   labels=labels,
+                                   size=self.size,
+                                   random_crop=self.random_crop
+                                   )
+        else:
+            self.data = self.abspaths_select    
 
 
 class Cifar10Train(Cifar10Base):
@@ -196,21 +261,45 @@ class Cifar10TrainOneImage(Cifar10Base):
         label_path = os.path.join(data_root,'label.json')
         super().__init__(data_root,label_path,'train', process_images,**kwargs)
     def __len__(self):
-        return 10000
+        return 1000
 
     def __getitem__(self, i):
-        return self.data[0]
+        idx = random.randint(0, 4)
+        return self.data[idx]
 
 class Cifar10ValidationOneImage(Cifar10Base):
 
     def __init__(self, process_images=True, data_root='~/dataset/cifar-10-batches-py',**kwargs):
         label_path = os.path.join(data_root,'label.json')
-        super().__init__(data_root,label_path,'train', process_images,**kwargs)
+        super().__init__(data_root,label_path,'val', process_images,**kwargs)
     def __len__(self):
         return 100
 
     def __getitem__(self, i):
-        return self.data[0]
+        idx = random.randint(0, 4)
+        return self.data[idx]
+    
+    
+class Cifar10TrainCaption(Cifar10Caption):
+    def __init__(self, process_images=True, data_root='~/dataset/cifar-10-batches-py',**kwargs):
+        label_path = os.path.join(data_root,'label.json')
+        super().__init__(data_root,label_path,'train', process_images,**kwargs)
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+class Cifar10ValidationCaption(Cifar10Caption):
+
+    def __init__(self, process_images=True, data_root='~/dataset/cifar-10-batches-py',**kwargs):
+        label_path = os.path.join(data_root,'label.json')
+        super().__init__(data_root,label_path,'val', process_images,**kwargs)
+    def __len__(self):
+        return 100
+
+    def __getitem__(self, i):
+        return self.data[i]
 
 
 
