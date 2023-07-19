@@ -7,18 +7,13 @@ import tensorflow_gan as tfgan
 import logging
 # Keep the import below for registering all model definitions
 import evaluation
-from torch.utils import tensorboard
-from absl import app
-from absl import flags
 import glob
 from omegaconf import OmegaConf
 import argparse
 from PIL import Image
 
 
-def evaluate(config,
-             workdir,
-             eval_folder="eval"):
+def evaluate(config,workdir,eval_folder="eval"):
   """Evaluate trained models.
   Args:
     config: Configuration to use.
@@ -27,6 +22,7 @@ def evaluate(config,
       "eval".
   """
   # Create directory to eval_folder
+  tf.keras.backend.clear_session()
   eval_dir = os.path.join(workdir, eval_folder)
   tf.io.gfile.makedirs(eval_dir)
   # Use inceptionV3 for images with resolution higher than 256.
@@ -42,6 +38,7 @@ def evaluate(config,
     if len(dirs) == 0:
       break
     # Directory to save samples. Different for each host to avoid writing conflicts
+    count = 0
     for this_sample_dir in dirs:
       sample_paths = glob.glob(os.path.join(this_sample_dir, f"samples_*.npz"))
       sample_paths.sort()
@@ -50,6 +47,7 @@ def evaluate(config,
         logging.info(f"evaluation -- ckpt: {ckpt}, round: {r}")
         # Read samples to disk or Google Cloud Storage
         samples = np.load(sample_path, "wb")['samples']
+        # samples = samples/255*2-1
         # resize size of synthetic images to that of dataset
         resized_samples = np.empty((0,config.data.image_size,config.data.image_size,3))
         if config.data.output_size != config.data.image_size:
@@ -57,11 +55,13 @@ def evaluate(config,
             img = Image.fromarray(samples[i])
             resized_samples = np.concatenate([resized_samples,
                                               np.expand_dims(np.array(img.resize([config.data.image_size]*2)),axis = 0)],axis = 0)
-        samples = resized_samples
+          samples = resized_samples
         # Force garbage collection before calling TensorFlow code for Inception network
         gc.collect()
+        count+=1
         latents = evaluation.run_inception_distributed(samples, inception_model,
                                                         inceptionv3=inceptionv3)
+        print(f'{count}/{500} done')
         # Force garbage collection again before returning to JAX code
         gc.collect()
         # Save latent represents of the Inception network to disk or Google Cloud Storage
@@ -79,7 +79,9 @@ def evaluate(config,
           with tf.io.gfile.GFile(stat_file, "rb") as fin:
               stat = np.load(fin)
               all_pools.append(stat["pool_3"])
-    all_pools = np.concatenate(all_pools, axis=0)[:config.eval.num_samples]
+    end_index = min(len(all_pools)*all_pools[0].shape[0],config.eval.num_samples)
+    all_pools = np.concatenate(all_pools, axis=0)[:end_index]
+    # all_pools = all_pools/255*2-1
     # Load pre-computed dataset statistics.
     data_stats = evaluation.load_dataset_stats(config)
     data_pools = data_stats["pool_3"]
@@ -91,7 +93,6 @@ def evaluate(config,
     with tf.io.gfile.GFile(os.path.join(eval_dir, f"report_{ckpt}.npz"),
                             "wb") as f:
       io_buffer = io.BytesIO()
-      np.savez_compressed(io_buffer, fid=fid)
       f.write(io_buffer.getvalue())
 def compute_dataset_stats(config):
     '''
@@ -102,31 +103,51 @@ def compute_dataset_stats(config):
     dataset_path = os.path.join(config.data.data_root,'imgs')
     if not os.path.isdir(dataset_path):
       raise FileNotFoundError('Incorrect data path')
+    batch_size = config.eval.batch_size
+    all_latents = []
     dataset = np.empty((0,config.data.image_size,config.data.image_size,3))
+    batch_imgs = []
     count = 0
-    for file in os.listdir(dataset_path):
-      if count == config.eval.num_samples:
-         break
+    sorted_path = sorted(os.listdir(dataset_path))
+    for file in sorted_path:
+   
       img = Image.open(os.path.join(dataset_path,file))
-      dataset = np.concatenate([dataset,np.expand_dims(np.array(img),0)],axis = 0)
-      count+=1
+      batch_imgs.append(img)
+      if len(batch_imgs)== batch_size:
+        dataset = np.stack(batch_imgs)
+        # dataset = np.array(dataset)
 
-    dataset = np.array(dataset)
-    gc.collect()
-    inceptionv3 = config.data.image_size >= 256
-    latents = evaluation.run_inception_distributed(dataset, evaluation.get_inception_model(inceptionv3=inceptionv3),
-                                                        inceptionv3=inceptionv3)
+        inceptionv3 = config.data.image_size >= 256
+        latents = evaluation.run_inception_distributed(dataset, evaluation.get_inception_model(inceptionv3=inceptionv3),
+                                                            inceptionv3=inceptionv3)
+        all_latents.append(latents['pool_3'])
+        batch_imgs = []
+        print(f'{count}/{int(len(sorted_path)/batch_size)}')
+        count+=1
+
+    all_latents = np.concatenate(all_latents,axis = 0)
     with tf.io.gfile.GFile(os.path.join(config.data.data_root, f"statistics_cifar.npz"), "wb") as fout:
           io_buffer = io.BytesIO()
           np.savez_compressed(
-            io_buffer, pool_3=latents["pool_3"])
+            io_buffer, pool_3=all_latents)
           fout.write(io_buffer.getvalue())
 def main():
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Set to the GPU index you want to use
+
+    # Configure TensorFlow to allocate memory on demand
+    gpus = tf.config.experimental.list_physical_devices("GPU")
+    if gpus:
+        try:
+            # Set memory growth to avoid allocating all GPU memory upfront
+            tf.config.experimental.set_memory_growth(gpus[0], True)
+        except RuntimeError as e:
+            print(e)
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path',type = str,default ='configs/eval/eval.yaml')
     args = parser.parse_args()
     config = OmegaConf.load(args.config_path)
-    compute_dataset_stats(config)
+    if not os.path.exists(os.path.join(config.data.data_root,'statistics_cifar.npz')):
+      compute_dataset_stats(config)
     evaluate(config, config.work_dir,config.eval.eval_folder)
 
 if __name__ == "__main__":
