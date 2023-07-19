@@ -248,6 +248,13 @@ class ResBlock(TimestepBlock):
                     af,
                     conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1),
                 )
+                self.adapter['teacher_diffusion'] = nn.Sequential(
+                    normalization(channels),
+                    nn.SiLU(),
+                    conv_nd(dims, channels, self.adp_config.mid_dim, 3, padding=1),
+                    af,
+                    conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1),
+                )
                 
             elif self.adp_config.din == "reso" and self.adp_config.dout == "reso":
                 self.adapter['online'] = nn.Sequential(
@@ -258,6 +265,13 @@ class ResBlock(TimestepBlock):
                     conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1)
                 )
                 self.adapter['target'] = nn.Sequential(
+                    normalization(self.out_channels),
+                    nn.SiLU(),
+                    conv_nd(dims, self.out_channels, self.adp_config.mid_dim, 3, padding=1),
+                    af,
+                    conv_nd(dims, self.adp_config.mid_dim, self.out_channels, 3, padding=1)
+                )
+                self.adapter['teacher_diffusion'] = nn.Sequential(
                     normalization(self.out_channels),
                     nn.SiLU(),
                     conv_nd(dims, self.out_channels, self.adp_config.mid_dim, 3, padding=1),
@@ -275,6 +289,13 @@ class ResBlock(TimestepBlock):
                     conv_nd(dims, self.adp_config.mid_dim, self.channels, 3, padding=1)
                 )
                 self.adapter['target'] = nn.Sequential(
+                    normalization(self.channels),
+                    nn.SiLU(),
+                    conv_nd(dims, self.channels, self.adp_config.mid_dim, 3, padding=1),
+                    af,
+                    conv_nd(dims, self.adp_config.mid_dim, self.channels, 3, padding=1)
+                )
+                self.adapter['teacher_diffusion'] = nn.Sequential(
                     normalization(self.channels),
                     nn.SiLU(),
                     conv_nd(dims, self.channels, self.adp_config.mid_dim, 3, padding=1),

@@ -1541,19 +1541,15 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         #CD Training Defaults
         start_ema=0.95,
         target_ema_mode="fixed",
-        scale_mode="fixed",
-        # total_training_steps=600000,
-        start_scales=40,
-        end_scales=40,
+        sample_scales=40,
         distill_steps_per_iter=50000,
         loss_norm="lpips",
-        consistent_schedule_sampler = None,
         # Non Unet Defaults
         sigma_data: float = 0.5,
         lr = 0.000008, 
         rho=7.0,
         ema_rate = "0.999,0.9999,0.9999432189950708",
-        weight_schedule="karras",
+        weight_schedule="diffusion_only",
         weight_decay = 0.0,
         resume_checkpoint=False,
         conditioning_key="labels",
@@ -1568,8 +1564,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         self.weight_schedule = weight_schedule
         self.weight_decay = weight_decay
         self.sigma_data = sigma_data
-        # self.sigma_max = sigma_max
-        # self.sigma_min = sigma_min
         self.rho = rho
         self.target_ema = start_ema
         self.distillation = distillation
@@ -1580,19 +1574,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         # self.total_steps = total_training_steps
         self.distill_steps_per_iter = distill_steps_per_iter
         self.lr = lr
-        # self.resample_num_timesteps = 1000
-        if consistent_schedule_sampler == "uniform":
-            self.consistent_schedule_sampler = UniformSampler(self.num_timesteps)
-        elif consistent_schedule_sampler == "loss-second-moment":
-            self.consistent_schedule_sampler = LossSecondMomentResampler(self.num_timesteps)
-        elif consistent_schedule_sampler == "lognormal":
-            self.consistent_schedule_sample = LogNormalSampler(self.num_timesteps)
-        else:
-            raise NotImplementedError(f"unknown schedule sampler: {consistent_schedule_sampler}")
-        # self.model = DiffusionWrapper(self.online_config, self.conditioning_key)
-        # self.ema_fn = create_ema_and_scales_fn(target_ema_mode,start_ema,scale_mode, start_scales, end_scales, self.total_steps,self.distill_steps_per_iter)
         ### setting the scale as constant
-        self.num_scales = start_scales
+        self.num_scales = sample_scales
         self.ema_rate = (
             [ema_rate]
             if isinstance(ema_rate, float)
@@ -1677,26 +1660,40 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         diffusion_loss, diffusion_loss_dict = self.DiffusionLosses(x, c, t, noise=None)
-        consistency_loss_weight, diffusion_loss_weight = self.loss_weight_scheduler()
+        consistency_loss_weight, diffusion_loss_weight = self.training_scheduler()
         loss = diffusion_loss * diffusion_loss_weight + consistency_loss * consistency_loss_weight
 
-        # t = torch.randint(1, self.num_timesteps, (x.shape[0],), device=self.device).long()
-        # loss *= resample_weights
+
         prefix = 'train' if self.training else 'val'
         loss_dict.update(consistency_loss_dict)
         loss_dict.update(diffusion_loss_dict)
         loss_dict.update({f'{prefix}/loss': loss.mean()})
         return loss, loss_dict
     
-    def loss_weight_scheduler(self):
-        consistency_loss_weight = 0 
-        diffusion_loss_weight = 1
+    def training_scheduler(self):
+        #self.global_step store total steps
+        if self.weight_schedule == "diffusion_only":
+            consistency_loss_weight = 0 
+            diffusion_loss_weight = 1
+        ##TODO
+        elif self.weight_schedule == "diffusion_consistency_separate":
+            if self.global_step < 12500:
+                consistency_loss_weight = 0 
+                diffusion_loss_weight = 1
+            else:
+                consistency_loss_weight = 1
+                diffusion_loss_weight = 0
+        else:
+            raise ValueError("Unexpected weight_schedule.")
+        
+        if self.global_step == 12500:
+            self.adapter_inout['target'].requires_grad_
         return consistency_loss_weight, diffusion_loss_weight
     
     def DDIM_solver(self, x_t, t, t2, cond):
         alpha_t = extract_into_tensor(self.alphas_cumprod, t, x_t.shape)
         alpha_t_prev = extract_into_tensor(self.alphas_cumprod, t2, x_t.shape)
-        pred_eps = self.apply_model(x_t, t,cond,None).detach()
+        pred_eps = self.apply_model(x_t, t,cond,'teacher_diffusion').detach()
         pred_x_prev = torch.sqrt(alpha_t_prev) * ((x_t * 1/torch.sqrt(alpha_t)) + (torch.sqrt((1 - alpha_t_prev)/alpha_t_prev) - torch.sqrt((1 - alpha_t)/alpha_t)) * pred_eps)
         return pred_x_prev
 
@@ -1801,7 +1798,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     def DiffusionLosses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
-        model_output = self.apply_model(x_t, t,cond,'online')
+        model_output = self.apply_model(x_t, t,cond, 'teacher_diffusion')
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
 
@@ -1835,6 +1832,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
     
         
     def apply_model(self, x_noisy, t, cond, model_type='online',return_ids=False):
+        
+        # model_type has 'online', 'target', 'teacher_diffusion'
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
             pass
@@ -1880,14 +1879,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             return x_recon[0]
         else:
             return x_recon
-
-    def get_weightings(self, weight_schedule):
-        if weight_schedule == "uniform":
-            weights_consistency = torch.tensor([1.], device=self.device)
-            weights_diffusion = torch.tensor([1.], device=self.device)
-        else:
-            raise NotImplementedError()
-        return weights_diffusion, weights_consistency
     
     @rank_zero_only
     def on_train_batch_end(self, *args, **kwargs):

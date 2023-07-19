@@ -1,0 +1,110 @@
+model:
+  base_learning_rate: 1.0e-05
+  target: ldm.models.diffusion.ddpm.ConsistentLatentDiffusion
+  params:
+    ckpt_path: "models/ldm/stable-diffusion-v1/model.ckpt"
+    linear_start: 0.00085
+    linear_end: 0.0120
+    # use_ema: true
+    start_ema: 0.95
+    train_level: ["adapter"] 
+    loss_norm: l2
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key: image
+    cond_stage_key: caption
+    image_size: 16
+    channels: 4
+    cond_stage_trainable: false
+    conditioning_key: crossattn
+    monitor: val/loss
+    weight_schedule: diffusion_consistency_separate
+    weight_decay: 0.0
+    scale_factor: 0.18215
+    lr: 0.000008
+    ema_rate: 0.999,0.9999,0.9999432189950708
+    unet_config:
+      target: ldm.modules.diffusionmodules.openaimodel_consistent.UNetModel_inject
+      params:
+        image_size: 32  #32 for channel mult [1,2,4,4]
+        in_channels: 4
+        out_channels: 4
+        model_channels: 320
+        attention_resolutions: [ 4, 2, 1 ]
+        num_res_blocks: 2
+        channel_mult: [ 1, 2, 4, 4 ]
+        num_heads: 8
+        use_spatial_transformer: True
+        transformer_depth: 1
+        context_dim: 768
+        use_checkpoint: True
+        legacy: False
+        adapter_config: 
+          transformer_adp_config:
+            - type: inout # inout
+              din: attn2o  # 
+              dout: ffni # 
+              mid_dim: 256
+              method: "default"
+              scale: 1.0 # 
+    
+    first_stage_config:
+      target: ldm.models.autoencoder.AutoencoderKL
+      params:
+        embed_dim: 4
+        monitor: val/rec_loss
+        ddconfig:
+          double_z: true
+          z_channels: 4
+          resolution: 256
+          in_channels: 3
+          out_ch: 3
+          ch: 128
+          ch_mult:
+          - 1
+          - 2
+          - 4
+          - 4
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
+        lossconfig:
+          target: torch.nn.Identity
+
+    cond_stage_config: 
+      target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 16
+    num_workers: 8
+    wrap: false
+    train:
+      target: ldm.data.cifar10.Cifar10TrainCaption
+      params:
+        config:
+          size: 128
+        data_root: /home/ubuntu/dataset/cifar-10-batches-py
+    validation:
+      target: ldm.data.cifar10.Cifar10ValidationCaption
+      params:
+        config:
+          size: 128
+        data_root: /home/ubuntu/dataset/cifar-10-batches-py
+
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main_consistent.ImageLogger
+      params:
+        batch_frequency: 500
+        max_images: 1
+        increase_log_steps: False
+        log_images_kwargs:
+          ddim_steps: 40
+
+  trainer:
+    benchmark: True
+    max_epochs: 40

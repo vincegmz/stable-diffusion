@@ -248,10 +248,11 @@ class BasicTransformerBlock(nn.Module):
             if config.din == "attn2c":
                 self.adapter_inout['online'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
                 self.adapter_inout['target'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
-
+                self.adapter_inout['teacher_diffusion'] = AdapterForward(context_dim, config.mid_dim, context_dim, config.method)
             else:
                 self.adapter_inout['online'] = AdapterForward(dim, config.mid_dim, dim, config.method)
                 self.adapter_inout['target'] = AdapterForward(dim, config.mid_dim, dim, config.method)
+                self.adapter_inout['teacher_diffusion'] = AdapterForward(dim, config.mid_dim, dim, config.method)
                 
             self.adapter_inout = nn.ModuleDict(self.adapter_inout)
             m_param = dict(self.adapter_inout['online'].named_parameters())
