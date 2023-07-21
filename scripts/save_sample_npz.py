@@ -296,6 +296,7 @@ def main():
         if os.path.exists(path):
             model = load_model_from_config(config, f"{path}")
         else:
+            raise FileNotFoundError('ckpt not exists')
             print(f"Instantiate from config")
             model = instantiate_from_config(config.model)
 

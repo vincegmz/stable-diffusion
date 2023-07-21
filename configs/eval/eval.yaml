@@ -7,6 +7,6 @@ eval:
   begin_ckpt: 20
   end_ckpt: 20
   num_samples: 50000
-  eval_folder: outputs/txt2img-samples/epoch=000005
+  eval_folder: outputs/txt2img-samples/epoch=000030
   batch_size: 500
 work_dir: '/home/minzhe_guo/Documents/GitHub/stable2'
