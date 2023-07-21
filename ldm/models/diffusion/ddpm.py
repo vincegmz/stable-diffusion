@@ -912,7 +912,6 @@ class LatentDiffusion(DDPM):
 
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)
-
         loss = self(x, c)
         return loss
 
@@ -1675,7 +1674,6 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         if self.weight_schedule == "diffusion_only":
             consistency_loss_weight = 0 
             diffusion_loss_weight = 1
-        ##TODO
         elif self.weight_schedule == "diffusion_consistency_separate":
             if self.global_step < 12500:
                 consistency_loss_weight = 0 
@@ -1686,8 +1684,8 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         else:
             raise ValueError("Unexpected weight_schedule.")
         
-        if self.global_step == 12500:
-            self.adapter_inout['target'].requires_grad_
+        # if self.global_step == 12500:
+        #     self.adapter_inout['target'].requires_grad_
         return consistency_loss_weight, diffusion_loss_weight
     
     def DDIM_solver(self, x_t, t, t2, cond):
@@ -1933,7 +1931,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             sequential_unfrozed = False
             ff_unfrozed = False
             for name, module in self.model.diffusion_model.named_modules():
-                if "adapter" and "online" in name:
+                if ("adapter" and "online") in name or ("adapter" and "teacher_diffusion" in name):
                     if type(module) is torch.nn.Sequential:
                         if not sequential_unfrozed:
                             sequential_unfrozed = True
@@ -1950,7 +1948,7 @@ class ConsistentLatentDiffusion(LatentDiffusion):
             sequential_added = False
             ff_added = False
             for name, module in self.model.diffusion_model.named_modules():
-                if "adapter" and "online" in name:
+                if ("adapter" and "online") in name or ("adapter" and "teacher_diffusion" in name):
                     if type(module) is torch.nn.Sequential:
                         if not sequential_added:
                             sequential_added = True
@@ -2017,27 +2015,26 @@ class ConsistentLatentDiffusion(LatentDiffusion):
         uc = self.get_learned_conditioning(len(c) * [""])
         
         if sample:
-            for sampler_type, sample_step in zip(["DDIMconsistency", "consistency"], [ddim_steps, 2]):
+            # for sampler_type, sample_step in zip(["DDIMconsistency", "consistency"], [ddim_steps, 2]):
                 # get denoise row
-                for idx, ema in enumerate(self.ema_rate):
-                    with self.ema_scope("Plotting", idx=idx):
-                        samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                                unconditional_guidance_scale=5.0,
-                                                                unconditional_conditioning=uc,
-                                                                ddim_steps=sample_step,eta=0.0,
-                                                                sampler_type=sampler_type,
-                                                                model_type = "online")
-                    x_samples = self.decode_first_stage(samples)
-                    log[f"samples_{sampler_type}_ema_{ema}"] = x_samples
-                with self.ema_scope("Plotting", idx=None):
-                    samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                            unconditional_guidance_scale=5.0,
-                                                            unconditional_conditioning=uc,
-                                                            ddim_steps=sample_step,eta=0.0,
-                                                            sampler_type=sampler_type,
-                                                            model_type = "online")
-                x_samples = self.decode_first_stage(samples)
-                log[f"samples_{sampler_type}_no_ema"] = x_samples
+                # for idx, ema in enumerate(self.ema_rate):
+                #     with self.ema_scope("Plotting", idx=idx):
+                #         samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+                #                                                 unconditional_guidance_scale=5.0,
+                #                                                 unconditional_conditioning=uc,
+                #                                                 ddim_steps=sample_step,eta=0.0,
+                #                                                 sampler_type=sampler_type,
+                #                                                 model_type = "online")
+                #     x_samples = self.decode_first_stage(samples)
+                #     log[f"samples_{sampler_type}_ema_{ema}"] = x_samples
+            samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+                                                    unconditional_guidance_scale=5.0,
+                                                    unconditional_conditioning=uc,
+                                                    ddim_steps=40,eta=0.0,
+                                                    sampler_type="DDIMconsistency",
+                                                    model_type = "teacher_diffusion")
+            x_samples = self.decode_first_stage(samples)
+            log[f"samples_DDIMconsistency_no_ema"] = x_samples
 
         if plot_progressive_rows:
             with self.ema_scope("Plotting Progressives"):

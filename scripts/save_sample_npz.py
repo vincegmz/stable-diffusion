@@ -22,6 +22,7 @@ from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from transformers import AutoFeatureExtractor
+from torchvision.transforms import Resize
 
 # load safety model
 safety_model_id = "CompVis/stable-diffusion-safety-checker"
@@ -236,6 +237,12 @@ def main():
         help="path to checkpoint of model",
     )
     parser.add_argument(
+        "--ckpt_root",
+        type=str,
+        default="models/ldm/stable-diffusion-v1/model.ckpt",
+        help="path to checkpoint of model",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -264,6 +271,16 @@ def main():
         type=int,
         help="index for select ema model, if None us online model ",
     )
+    parser.add_argument(
+        "--begin_ckpt",
+        type = int,
+        default = 0
+    )
+    parser.add_argument(
+        "--end_ckpt",
+        type = int,
+        default = 0
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -273,154 +290,182 @@ def main():
         opt.outdir = "outputs/txt2img-samples-laion400m"
 
     seed_everything(opt.seed)
+    for ckpt in range(opt.begin_ckpt,opt.end_ckpt+1):
+        config = OmegaConf.load(f"{opt.config}")
+        path = os.path.join(opt.ckpt_root,f"epoch={ckpt:06d}.ckpt")
+        if os.path.exists(path):
+            model = load_model_from_config(config, f"{path}")
+        else:
+            print(f"Instantiate from config")
+            model = instantiate_from_config(config.model)
 
-    config = OmegaConf.load(f"{opt.config}")
-    if os.path.exists(opt.ckpt):
-        model = load_model_from_config(config, f"{opt.ckpt}")
-    else:
-        print(f"Instantiate from config")
-        model = instantiate_from_config(config.model)
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        model = model.to(device)
+        if opt.consistent:
+            sampler = ConsistentSolverSampler(model,sampler = 'multistep')
+        elif opt.ddimconsistent:
+            sampler = DDIMConsistencySampler(model)
+        elif opt.dpm_solver:
+            sampler = DPMSolverSampler(model)
+        elif opt.plms:
+            sampler = PLMSSampler(model)
+        else:
+            sampler = DDIMSampler(model)
 
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model.to(device)
-    if opt.consistent:
-        sampler = ConsistentSolverSampler(model,sampler = 'multistep')
-    elif opt.ddimconsistent:
-        sampler = DDIMConsistencySampler(model)
-    elif opt.dpm_solver:
-        sampler = DPMSolverSampler(model)
-    elif opt.plms:
-        sampler = PLMSSampler(model)
-    else:
-        sampler = DDIMSampler(model)
+        os.makedirs(opt.outdir, exist_ok=True)
+        outpath = opt.outdir
 
-    os.makedirs(opt.outdir, exist_ok=True)
-    outpath = opt.outdir
+        print("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
+        wm = "StableDiffusionV1"
+        wm_encoder = WatermarkEncoder()
+        wm_encoder.set_watermark('bytes', wm.encode('utf-8'))
 
-    print("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
-    wm = "StableDiffusionV1"
-    wm_encoder = WatermarkEncoder()
-    wm_encoder.set_watermark('bytes', wm.encode('utf-8'))
-
-    batch_size = opt.n_samples
-    n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
-    if not opt.from_file:
-        prompt = opt.promptconsistent
-        assert prompt is not None
-        data = [batch_size * [prompt]]
-
-    else:
-        print(f"reading prompts from {opt.from_file}")
-        with open(opt.from_file, "r") as f:
-            data = f.read().splitlines()
-            data = list(chunk(data, batch_size))
-
-    sample_path = os.path.join(outpath, "samples")
-    os.makedirs(sample_path, exist_ok=True)
-    base_count = len(os.listdir(sample_path))
-    grid_count = len(os.listdir(outpath)) - 1
-
-    start_code = None
-    if opt.fixed_code:
-        start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-
-    precision_scope = autocast if opt.precision=="autocast" else nullcontext
-    num_iterations = opt.dataset_size//batch_size
-    with torch.no_grad():
-        with precision_scope("cuda"):
-            with model.ema_scope(idx = opt.ema_idx):
-                tic = time.time()
-                all_samples = list()
-                for n in trange(num_iterations, desc="Sampling"):
-                    for prompts in tqdm(data, desc="data"):
-                        uc = None
-                        if opt.scale != 1.0:
-                            uc = model.get_learned_conditioning(batch_size * [""])
-                        if isinstance(prompts, tuple):
-                            prompts = list(prompts)
-                        c = model.get_learned_conditioning(prompts)
-                        shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                         conditioning=c,
-                                                         batch_size=opt.n_samples,
-                                                         shape=shape,
-                                                         verbose=False,
-                                                         unconditional_guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc,
-                                                         eta=opt.ddim_eta,
-                                                         x_T=start_code,
-                                                         model_type = opt.model_type)
-
-                        x_samples_ddim = model.decode_first_stage(samples_ddim)
-                        # why clamp (x_samples_ddim + 1.0) / 2.0? 
-                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                        x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1)
-                        x_samples_ddim = (x_samples_ddim*255).to(torch.uint8).numpy()
-                        for idx_img in range(x_samples_ddim.shape[0]):
-                            cv2.imwrite(os.path.join(outpath, f'grid-{grid_count:04}.png'), x_samples_ddim[idx_img, :, :, ::-1])
-                            grid_count += 1
-                        # test code
-                        # shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        # samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                        #                                  conditioning=c,
-                        #                                  batch_size=opt.n_samples,
-                        #                                  shape=shape,
-                        #                                  verbose=False,
-                        #                                  unconditional_guidance_scale=opt.scale,
-                        #                                  unconditional_conditioning=uc,
-                        #                                  eta=opt.ddim_eta,
-                        #                                  x_T=torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device))
-
-                        # x_samples_ddim = model.decode_first_stage(samples_ddim)
-                        # # why clamp (x_samples_ddim + 1.0) / 2.0? 
-                        # x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                        # x_samples_ddim = x_samples_ddim.permute(0,2,3,1)
-                        # samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
-                        # cv2.imwrite("test.png", samples.cpu()[0].numpy())
+        batch_size = opt.n_samples
+        n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
+        if not opt.from_file:
+            prompt = opt.prompt
+            assert prompt is not None
 
 
-                        # with open(os.path.join(outpath, f"samples_{n}.npz"), "wb") as fout:
-                        #     io_buffer = io.BytesIO()
-                        #     samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
-                        #     np.savez_compressed(io_buffer, samples=samples.cpu())
-                        #     fout.write(io_buffer.getvalue())
+        else:
+            print(f"reading prompts from {opt.from_file}")
+            with open(opt.from_file, "r") as f:
+                data = f.read().splitlines()
+                data = list(chunk(data, batch_size))
 
-                        # x_samples_ddim = x_samples_ddim.cpu().numpy()
+        sample_path = os.path.join(outpath, "samples")
+        os.makedirs(sample_path, exist_ok=True)
+        base_count = len(os.listdir(sample_path))
+        grid_count = len(os.listdir(outpath)) - 1
 
-                        # x_checked_image, has_nsfw_concept = check_safety(x_samples_ddim)
+        start_code = None
+        if opt.fixed_code:
+            start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
-                        # x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+        precision_scope = autocast if opt.precision=="autocast" else nullcontext
+        num_iterations = opt.dataset_size//batch_size
+        human_dict = {
+            0: 'airplane',
+            1: 'automobile',
+            2: 'bird',
+            3: 'cat',
+            4: 'deer',
+            5: 'dog',
+            6: 'frog',
+            7: 'horse',
+            8: 'ship',
+            9: 'truck'
+        }
+        with torch.no_grad():
+            with precision_scope("cuda"):
+                with model.ema_scope(idx = opt.ema_idx):
+                    tic = time.time()
+                    all_samples = list()
+                    for n in trange(num_iterations, desc="Sampling"):
+                        data = []
+                        for i in range(batch_size):
+                            data.append(prompt.replace('*',human_dict[i%10]))
+                        data = [data]
+                        for prompts in tqdm(data, desc="data"):
+                            uc = None
+                            if opt.scale != 1.0:
+                                uc = model.get_learned_conditioning(batch_size * [""])
+                            if isinstance(prompts, tuple):
+                                prompts = list(prompts)
+                            c = model.get_learned_conditioning(prompts)
+                            shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                            samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
+                                                            conditioning=c,
+                                                            batch_size=opt.n_samples,
+                                                            shape=shape,
+                                                            verbose=False,
+                                                            unconditional_guidance_scale=opt.scale,
+                                                            unconditional_conditioning=uc,
+                                                            eta=opt.ddim_eta,
+                                                            x_T=start_code,
+                                                            model_type = opt.model_type)
 
-                        # x_checked_image_torch = samples.permute(0, 3, 1, 2)
- 
-                        # if not opt.skip_save:
-                        #     for x_sample in x_checked_image_torch:
-                        #         x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                        #         img = Image.fromarray(x_sample.astype(np.uint8))
-                        #         img = put_watermark(img, wm_encoder)
-                        #         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
-                        #         base_count += 1
+                            x_samples_ddim = model.decode_first_stage(samples_ddim)
+                            # why clamp (x_samples_ddim + 1.0) / 2.0? 
+                            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                            x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1)
+                            x_samples_ddim = (x_samples_ddim*255).to(torch.uint8).numpy()
+                            # for idx_img in range(x_samples_ddim.shape[0]):
+                            #     cv2.imwrite(os.path.join(outpath, f'grid-{grid_count:04}.png'), x_samples_ddim[idx_img, :, :, ::-1])
+                            #     grid_count += 1
+                            out_dir_name = os.path.join(outpath,f"epoch={ckpt:06d}")
+                            if not os.path.exists(out_dir_name):
+                                os.mkdir(out_dir_name)
+                            with open(os.path.join(out_dir_name,f"samples_{n}.npz"), "wb") as fout:
+                                io_buffer = io.BytesIO()
+                                # samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
+                                resize = Resize((32,32))
+                                resized_samples = [np.array(resize(Image.fromarray(x_samples_ddim[i]))) for i in range(x_samples_ddim.shape[0])]
+                                np.savez_compressed(io_buffer, samples=np.stack(resized_samples))
+                                fout.write(io_buffer.getvalue())
+                            torch.cuda.empty_cache()
+                            # test code
+                            # shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                            # samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
+                            #                                  conditioning=c,
+                            #                                  batch_size=opt.n_samples,
+                            #                                  shape=shape,
+                            #                                  verbose=False,
+                            #                                  unconditional_guidance_scale=opt.scale,
+                            #                                  unconditional_conditioning=uc,
+                            #                                  eta=opt.ddim_eta,
+                            #                                  x_T=torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device))
 
-                #         if not opt.skip_grid:
-                #             all_samples.append(x_samples_ddim)
+                            # x_samples_ddim = model.decode_first_stage(samples_ddim)
+                            # # why clamp (x_samples_ddim + 1.0) / 2.0? 
+                            # x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                            # x_samples_ddim = x_samples_ddim.permute(0,2,3,1)
+                            # samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
+                            # cv2.imwrite("test.png", samples.cpu()[0].numpy())
 
-                # if not opt.skip_grid:
-                #     # additionally, save as grid
-                #     grid = torch.stack(all_samples, 0)
-                #     grid = rearrange(grid, 'n b h w c-> (n b) h w c')
-                #     grid = make_grid(grid, nrow=n_rows)
 
-                #     # to image
-                #     grid = 255. * grid.numpy()
-                #     img = Image.fromarray(grid.astype(np.uint8))
-                #     # img = put_watermark(img, wm_encoder)
-                    
-                #     grid_count += 1
+                            # with open(os.path.join(outpath, f"samples_{n}.npz"), "wb") as fout:
+                            #     io_buffer = io.BytesIO()
+                            #     samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
+                            #     np.savez_compressed(io_buffer, samples=samples.cpu())
+                            #     fout.write(io_buffer.getvalue())
 
-                toc = time.time()
+                            # x_samples_ddim = x_samples_ddim.cpu().numpy()
 
-    print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
-          f" \nEnjoy.")
+                            # x_checked_image, has_nsfw_concept = check_safety(x_samples_ddim)
+
+                            # x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+
+                            # x_checked_image_torch = samples.permute(0, 3, 1, 2)
+    
+                            # if not opt.skip_save:
+                            #     for x_sample in x_checked_image_torch:
+                            #         x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                            #         img = Image.fromarray(x_sample.astype(np.uint8))
+                            #         img = put_watermark(img, wm_encoder)
+                            #         img.save(os.path.join(sample_path, f"{base_count:05}.png"))
+                            #         base_count += 1
+
+                    #         if not opt.skip_grid:
+                    #             all_samples.append(x_samples_ddim)
+
+                    # if not opt.skip_grid:
+                    #     # additionally, save as grid
+                    #     grid = torch.stack(all_samples, 0)
+                    #     grid = rearrange(grid, 'n b h w c-> (n b) h w c')
+                    #     grid = make_grid(grid, nrow=n_rows)
+
+                    #     # to image
+                    #     grid = 255. * grid.numpy()
+                    #     img = Image.fromarray(grid.astype(np.uint8))
+                    #     # img = put_watermark(img, wm_encoder)
+                        
+                    #     grid_count += 1
+
+                    toc = time.time()
+
+        print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
+            f" \nEnjoy.")
 
 
 if __name__ == "__main__":

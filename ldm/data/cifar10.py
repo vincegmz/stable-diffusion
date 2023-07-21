@@ -179,8 +179,9 @@ class Cifar10Base(Dataset):
             
             
 class Cifar10Caption(Cifar10Base):
-    def __init__(self, data_root,label_path,mode, process_images, config=None, selection_cate = None):
+    def __init__(self, data_root,label_path,mode, process_images, empty_cap_prob = 0.1, config=None, selection_cate = None):
         self.selection_cate = selection_cate
+        self.empty_cap_prob = empty_cap_prob
         super().__init__(data_root,label_path,mode, process_images, config)
         
         
@@ -229,8 +230,7 @@ class Cifar10Caption(Cifar10Base):
             "human_label": np.array(self.human_labels_select),
             "caption":np.array([f'photo of a {label}' for label in self.human_labels_select])
         }
-        
-        
+
 
         if self.process_images:
             self.size = retrieve(self.config, "size", default=256)
@@ -241,6 +241,11 @@ class Cifar10Caption(Cifar10Base):
                                    )
         else:
             self.data = self.abspaths_select    
+
+    def __getitem__(self, i):
+        # img = Image.fromarray(self.data[i]['image'])
+        # img.save('~/Downloads')
+        return self.data[i]
 
 
 class Cifar10Train(Cifar10Base):
@@ -288,7 +293,10 @@ class Cifar10TrainCaption(Cifar10Caption):
         return len(self.data)
 
     def __getitem__(self, i):
-        return self.data[i]
+        data_sample = dict(self.data[i]) 
+        if np.random.random() < self.empty_cap_prob:
+            data_sample['caption'] = ""
+        return data_sample
 
 class Cifar10ValidationCaption(Cifar10Caption):
 

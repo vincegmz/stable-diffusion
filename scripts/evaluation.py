@@ -22,7 +22,7 @@ import tensorflow as tf
 import tensorflow_gan as tfgan
 import tensorflow_hub as tfhub
 import os
-
+import gc
 INCEPTION_TFHUB = 'https://tfhub.dev/tensorflow/tfgan/eval/inception/1'
 INCEPTION_OUTPUT = 'logits'
 INCEPTION_FINAL_POOL = 'pool_3'
@@ -44,7 +44,8 @@ def get_inception_model(inceptionv3=False):
 def load_dataset_stats(config):
   """Load the pre-computed dataset statistics."""
   if config.data.dataset == 'CIFAR10':
-    filename = os.path.join(config.data.data_root,'statistics_cifar.npz')
+    # filename = os.path.join(config.data.data_root,'statistics_cifar.npz')
+    filename = os.path.join('/home/minzhe_guo/Downloads','cifar10_stats.npz')
   elif config.data.dataset == 'CELEBA':
     filename = 'assets/stats/celeba_stats.npz'
   elif config.data.dataset == 'LSUN':
@@ -84,7 +85,7 @@ def classifier_fn_from_tfhub(output_fields, inception_model,
   return _classifier_fn
 
 
-@tf.function
+# @tf.function
 def run_inception_jit(inputs,
                       inception_model,
                       num_batches=1,
@@ -102,7 +103,7 @@ def run_inception_jit(inputs,
     dtypes=_DEFAULT_DTYPES)
 
 
-@tf.function
+# @tf.function
 def run_inception_distributed(input_tensor,
                               inception_model,
                               num_batches=1,
@@ -124,6 +125,7 @@ def run_inception_distributed(input_tensor,
   device_format = '/TPU:{}' if 'TPU' in str(jax.devices()[0]) else '/GPU:{}'
   for i, tensor in enumerate(input_tensors):
     with tf.device(device_format.format(i)):
+   
       tensor_on_device = tf.identity(tensor)
       res = run_inception_jit(
         tensor_on_device, inception_model, num_batches=num_batches,
@@ -134,6 +136,9 @@ def run_inception_distributed(input_tensor,
         logits.append(res['logits'])  # pytype: disable=attribute-error
       else:
         pool3.append(res)
+      tf.keras.backend.clear_session()
+      del tensor_on_device
+      gc.collect()
 
   with tf.device('/CPU'):
     return {
