@@ -386,7 +386,7 @@ def main():
                     all_samples = list()
                     id = 0
                     out_dir_name = os.path.join(outpath,f"epoch={ckpt:06d}",opt.run_name)
-                    os.makedirs(out_dir_name,exists_ok=True)
+                    os.makedirs(out_dir_name,exist_ok=True)
                     if os.path.exists(os.path.join(out_dir_name,'current_itr.txt')):
                         with open(opt.current_itr_path,'r') as f:
                             current_itr = int(f.read())
