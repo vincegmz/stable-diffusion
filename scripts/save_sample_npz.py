@@ -3,6 +3,7 @@ import cv2
 import torch
 import numpy as np
 import io
+import warnings
 from omegaconf import OmegaConf
 from PIL import Image
 from tqdm import tqdm, trange
@@ -281,6 +282,19 @@ def main():
         type = int,
         default = 0
     )
+    parser.add_argument(
+        "--start_code_path",
+        type = str,
+        default='/home/ubuntu/exp/stablediffusion/test512/start_code.pt'
+
+    )
+    parser.add_argument(
+        "--run_name",
+        type = str,
+
+    )
+
+
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -347,7 +361,8 @@ def main():
                 assert start_code.shape == temp_code.shape
                 start_code = temp_code
             else:
-                sys.exit('start_code is not fixed across attempts')
+                torch.save(start_code,opt.start_code_path)
+                warnings.warn('start_code is not fixed across attempts',UserWarning)
 
 
         precision_scope = autocast if opt.precision=="autocast" else nullcontext
@@ -370,7 +385,14 @@ def main():
                     tic = time.time()
                     all_samples = list()
                     id = 0
-                    for n in trange(num_iterations, desc="Sampling"):
+                    out_dir_name = os.path.join(outpath,f"epoch={ckpt:06d}",opt.run_name)
+                    os.mkdir(out_dir_name,exists_ok=True)
+                    if os.path.exists(os.path.join(out_dir_name,'current_itr.txt')):
+                        with open(opt.current_itr_path,'r') as f:
+                            current_itr = int(f.read())
+                    else:
+                        current_itr = 0   
+                    for n in trange(current_itr,num_iterations, desc="Sampling"):
                         data = []
                         for _ in range(batch_size):
                             data.append(prompt.replace('*',human_dict[id%10]))
@@ -403,9 +425,7 @@ def main():
                             # for idx_img in range(x_samples_ddim.shape[0]):
                             #     cv2.imwrite(os.path.join(outpath, f'grid-{grid_count:04}.png'), x_samples_ddim[idx_img, :, :, ::-1])
                             #     grid_count += 1
-                            out_dir_name = os.path.join(outpath,f"epoch={ckpt:06d}")
-                            if not os.path.exists(out_dir_name):
-                                os.mkdir(out_dir_name)
+                        
                             with open(os.path.join(out_dir_name,f"samples_{n}.npz"), "wb") as fout:
                                 io_buffer = io.BytesIO()
                                 # samples =  torch.clip(x_samples_ddim* 255., 0, 255).to(torch.uint8)
@@ -413,6 +433,8 @@ def main():
                                 resized_samples = [np.array(resize(Image.fromarray(x_samples_ddim[i]))) for i in range(x_samples_ddim.shape[0])]
                                 np.savez_compressed(io_buffer, samples=np.stack(resized_samples))
                                 fout.write(io_buffer.getvalue())
+                            with open(os.path.join(out_dir_name),'w') as f:
+                                f.write(f'{n}')
                             torch.cuda.empty_cache()
                             # test code
                             # shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
