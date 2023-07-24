@@ -342,6 +342,13 @@ def main():
         start_code = None
         if opt.fixed_code:
             start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+            if os.path.exists(opt.start_code_path):
+                temp_code = torch.load(opt.start_code_path)
+                assert start_code.shape == temp_code.shape
+                start_code = temp_code
+            else:
+                sys.exit('start_code is not fixed across attempts')
+
 
         precision_scope = autocast if opt.precision=="autocast" else nullcontext
         num_iterations = opt.dataset_size//batch_size
@@ -362,10 +369,12 @@ def main():
                 with model.ema_scope(idx = opt.ema_idx):
                     tic = time.time()
                     all_samples = list()
+                    id = 0
                     for n in trange(num_iterations, desc="Sampling"):
                         data = []
-                        for i in range(batch_size):
-                            data.append(prompt.replace('*',human_dict[i%10]))
+                        for _ in range(batch_size):
+                            data.append(prompt.replace('*',human_dict[id%10]))
+                            id+=1
                         data = [data]
                         for prompts in tqdm(data, desc="data"):
                             uc = None
