@@ -433,7 +433,7 @@ def main():
                                 resized_samples = [np.array(resize(Image.fromarray(x_samples_ddim[i]))) for i in range(x_samples_ddim.shape[0])]
                                 np.savez_compressed(io_buffer, samples=np.stack(resized_samples))
                                 fout.write(io_buffer.getvalue())
-                            with open(os.path.join(out_dir_name),'w') as f:
+                            with open(os.path.join(out_dir_name,'current_itr.txt'),'w') as f:
                                 f.write(f'{n}')
                             torch.cuda.empty_cache()
                             # test code
